@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>日本語 RSVP リーダー</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#14161c">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Serif+JP:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #14161c;
+    --surface: #1e212b;
+    --surface-alt: #262a37;
+    --line: #343a4a;
+    --text: #f1eee6;
+    --text-dim: #8b93a6;
+    --accent: #e2543b;
+    --accent-soft: #f0a98f;
+    --ui-font: "Hiragino Sans", "Noto Sans JP", -apple-system, system-ui, sans-serif;
+  }
+  *{ box-sizing: border-box; }
+  html,body{
+    margin:0; padding:0; height:100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--ui-font);
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  body{
+    display:flex; flex-direction:column;
+    height:100vh; height:100dvh;
+  }
+
+  /* ---------- ヘッダー ---------- */
+  header{
+    display:flex; align-items:center; gap:10px;
+    padding: max(10px, env(safe-area-inset-top)) 14px 10px 14px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .brand{
+    font-family: "Noto Serif JP", serif;
+    font-weight:700; font-size:15px;
+    color: var(--accent-soft);
+    letter-spacing: .05em;
+    margin-right: 6px;
+    white-space: nowrap;
+  }
+  header .spacer{ flex:1; }
+  button, .btn{
+    font-family: var(--ui-font);
+    background: var(--surface-alt);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 12px;
+    font-size: 14px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  button:active{ background: #30364a; }
+  button.primary{
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #1b0d09;
+    font-weight: 600;
+  }
+  button.primary:active{ background: #c8492f; }
+  button.icon{
+    padding: 7px 10px;
+    font-size: 16px;
+    line-height: 1;
+  }
+  #gearBtn{ font-size:18px; }
+
+  /* ---------- 設定パネル ---------- */
+  #settingsPanel{
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    padding: 10px 14px 14px;
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #settingsPanel.open{ display:flex; }
+  .row{
+    display:flex; align-items:center; gap:8px; flex-wrap: wrap;
+  }
+  .row label{
+    font-size: 12px; color: var(--text-dim);
+    min-width: 64px;
+  }
+  select, input[type=text], input[type=number]{
+    font-family: var(--ui-font);
+    background: var(--surface-alt);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 14px;
+  }
+  select{ max-width: 220px; }
+  input[type=number]{ width: 70px; }
+  input[type=range]{ flex:1; accent-color: var(--accent); }
+
+  /* ---------- 表示エリア ---------- */
+  main{
+    flex: 1;
+    display:flex;
+    align-items:center; justify-content:center;
+    position: relative;
+    overflow: hidden;
+  }
+  #readerCanvas{
+    width: 100%; height: 100%;
+    display:block;
+    touch-action: manipulation;
+  }
+  #dropHint{
+    position:absolute; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap: 14px;
+    color: var(--text-dim);
+    text-align:center;
+    padding: 24px;
+  }
+  #dropHint .glyph{
+    font-family: "Noto Serif JP", serif;
+    font-size: 64px;
+    color: var(--accent);
+    line-height: 1;
+  }
+  #dropHint p{ margin:0; font-size:14px; max-width: 320px; line-height:1.7; }
+  #dropHint .retryBtn{ display:none; }
+
+  /* ---------- フッター(トランスポート) ---------- */
+  footer{
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    padding: 10px 14px max(10px, env(safe-area-inset-bottom));
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .statusRow{
+    display:flex; justify-content:space-between; align-items:center;
+    font-size: 12px; color: var(--text-dim);
+    gap: 10px;
+  }
+  #statusText{ flex:1; }
+  .progressBar{
+    height: 3px; background: var(--line); border-radius: 2px; overflow:hidden;
+  }
+  .progressBar > div{
+    height:100%; background: var(--accent); width:0%;
+    transition: width .15s linear;
+  }
+  .transport{
+    display:flex; align-items:center; justify-content:center; gap:8px;
+  }
+  /* タッチ操作のしやすさ向上 (課題5対応):
+     ボタンの実タップ領域を最低44x44pt相当に拡大する。
+     見た目のpaddingは変えず、当たり判定だけ広げる。 */
+  .transport button{
+    flex: 0 0 auto;
+    min-width: 46px;
+    min-height: 44px;
+    position: relative;
+  }
+  .transport button::after{
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+  .transport .gap{ flex:1; max-width: 18px; }
+  .jumpRow{
+    display:flex; align-items:center; justify-content:center; gap:6px;
+  }
+  .jumpRow input{ width: 70px; text-align:center; }
+
+  @media (min-width: 700px){
+    .brand{ font-size:17px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">日本語 RSVP リーダー</span>
+  <div class="spacer"></div>
+  <button id="openFileBtn">ファイルを開く</button>
+  <button id="gearBtn" class="icon" title="設定">⚙</button>
+</header>
+
+<div id="settingsPanel">
+  <div class="row">
+    <label>フォント</label>
+    <select id="fontFamily">
+      <option value='"Hiragino Mincho ProN", "Noto Serif JP", serif'>明朝 (Hiragino Mincho / Noto Serif JP)</option>
+      <option value='"Hiragino Sans", "Noto Sans JP", sans-serif' selected>ゴシック (Hiragino Sans / Noto Sans JP)</option>
+      <option value='"Yu Mincho", "YuMincho", serif'>游明朝 (Yu Mincho)</option>
+      <option value='"Yu Gothic", "Meiryo", sans-serif'>游ゴシック / メイリオ</option>
+      <option value="__custom__">カスタム入力...</option>
+    </select>
+    <input type="text" id="fontFamilyCustom" placeholder="フォント名を入力" style="display:none; flex:1; min-width:140px;">
+  </div>
+  <div class="row">
+    <label>サイズ</label>
+    <input type="range" id="fontSize" min="20" max="120" step="2" value="56">
+    <span id="fontSizeLabel" style="width:46px; text-align:right; font-size:13px; color:var(--text-dim);">56px</span>
+  </div>
+  <div class="row">
+    <button id="confirmFontBtn" class="primary">確定</button>
+    <div class="spacer"></div>
+    <label style="min-width:auto;">文節番号</label>
+    <input type="number" id="jumpInput" min="1" step="1" placeholder="例: 36">
+    <button id="jumpBtn">移動</button>
+  </div>
+</div>
+
+<main>
+  <canvas id="readerCanvas"></canvas>
+  <div id="dropHint">
+    <div class="glyph">読</div>
+    <p id="dropHintText">
+      右上の「ファイルを開く」からテキストファイル(.txt)を選んでください。<br>
+      iPadやiPhoneでは「ファイル」アプリ経由でGoogleドライブ上のファイルも選べます
+      (Googleドライブをファイルの保存先として有効にしている場合)。
+    </p>
+    <button id="retryDictBtn" class="retryBtn primary">辞書の読み込みを再試行</button>
+  </div>
+</main>
+
+<footer>
+  <div class="statusRow">
+    <span id="statusText">ファイルを開いてください</span>
+    <span id="wpmText">400 WPM</span>
+  </div>
+  <div class="progressBar"><div id="progressFill"></div></div>
+  <div class="transport">
+    <button id="seekBackBtn" class="icon" title="戻る">⏮</button>
+    <button id="speedDownBtn" class="icon" title="速度を下げる">▾速度</button>
+    <button id="playPauseBtn" class="icon primary" title="再生/一時停止" style="min-width:64px;">▶</button>
+    <button id="speedUpBtn" class="icon" title="速度を上げる">▴速度</button>
+    <button id="seekFwdBtn" class="icon" title="進める">⏭</button>
+  </div>
+</footer>
+
+<input type="file" id="fileInput" accept=".txt,text/plain" style="display:none;">
+
+<script>
+/* =====================================================================
+   kuromoji.js のロード (CDNフォールバック対応)
+
+   課題1対応: jsdelivr経由の辞書ファイル(.dat.gz)読み込みが失敗する
+   ケースが報告されているため、kuromoji.js 本体・辞書のCDNを複数用意し、
+   最初のCDNが失敗したら次のCDNに自動的に切り替える。
+   ===================================================================== */
+const KUROMOJI_CDNS = [
+  {
+    label: "jsdelivr",
+    scriptUrl: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js",
+    dicPath: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/",
+  },
+  {
+    label: "unpkg",
+    scriptUrl: "https://unpkg.com/kuromoji@0.1.2/build/kuromoji.js",
+    dicPath: "https://unpkg.com/kuromoji@0.1.2/dict/",
+  },
+  {
+    label: "cdnjs (jsdelivr dict)",
+    scriptUrl: "https://cdnjs.cloudflare.com/ajax/libs/kuromoji/0.1.2/kuromoji.js",
+    dicPath: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/",
+  },
+];
+
+function loadScriptOnce(url) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-kuromoji-src="${url}"]`);
+    if (existing) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = url;
+    s.async = true;
+    s.dataset.kuromojiSrc = url;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error(`スクリプト読み込み失敗: ${url}`));
+    document.head.appendChild(s);
+  });
+}
+</script>
+<script src="app.js" defer></script>
+</body>
+</html>
