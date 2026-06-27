@@ -128,13 +128,22 @@ function mergeShortChunks(chunksIn, shortLen = 4, maxLen = 8) {
   return chunks;
 }
 
-function orpPosition(word) {
-  const len = word.length;
+function orpPosition(len) {
+  // len はコードポイント数 (サロゲートペアを1文字として数えた長さ)
   if (len <= 1) return 0;
   let pos = Math.round(len * 0.35);
   if (pos < 0) pos = 0;
   if (pos >= len) pos = len - 1;
   return pos;
+}
+
+// 稀な漢字・記号・絵文字などはUTF-16で2コードユニット(サロゲートペア)に
+// なることがある。.length や .slice() はコードユニット単位のため、
+// そのまま使うとペアの真ん中で文字が分断されてしまい、ORP表示の位置が
+// おかしくなる(文字が右に寄り、左に空白ができる)原因になっていた。
+// Array.from() はコードポイント単位で分割するため、この問題を回避できる。
+function toCodePointArray(str) {
+  return Array.from(str);
 }
 
 function durationMsFor(chunk, wpm) {
@@ -162,6 +171,7 @@ const els = {
   fontFamilyCustom: document.getElementById("fontFamilyCustom"),
   fontSize: document.getElementById("fontSize"),
   fontSizeLabel: document.getElementById("fontSizeLabel"),
+  colorMode: document.getElementById("colorMode"),
   confirmFontBtn: document.getElementById("confirmFontBtn"),
   jumpInput: document.getElementById("jumpInput"),
   jumpBtn: document.getElementById("jumpBtn"),
@@ -185,6 +195,7 @@ const state = {
   timerId: null,
   fontFamily: els.fontFamily.value,
   fontSize: parseInt(els.fontSize.value, 10),
+  monoColor: localStorage.getItem("jrsvp_mono_color") === "1",
   fileKey: null, // localStorage上の進捗保存キー
   dictReady: false,
   pendingTokenizeId: 0,
@@ -292,11 +303,12 @@ function render() {
 
   if (!state.chunks.length) return;
 
-  const chunk = state.chunks[state.index].text;
-  const orp = orpPosition(chunk);
-  const left = chunk.slice(0, orp);
-  const center = chunk[orp];
-  const right = chunk.slice(orp + 1);
+  const chunkText = state.chunks[state.index].text;
+  const chars = toCodePointArray(chunkText);
+  const orp = orpPosition(chars.length);
+  const left = chars.slice(0, orp).join("");
+  const center = chars[orp];
+  const right = chars.slice(orp + 1).join("");
 
   const cx = w / 2;
   const cy = h / 2 - 10;
@@ -315,11 +327,14 @@ function render() {
   ctx.lineTo(cx, cy + state.fontSize * 0.9);
   ctx.stroke();
 
+  // 文字色: state.monoColor が true なら中央文字も白(単色)、false なら赤
+  const centerColor = state.monoColor ? "#e8e5da" : "#e2543b";
+
   ctx.fillStyle = "#e8e5da";
   ctx.textAlign = "right";
   ctx.fillText(left, cx - centerW / 2, cy);
 
-  ctx.fillStyle = "#e2543b";
+  ctx.fillStyle = centerColor;
   ctx.textAlign = "center";
   ctx.fillText(center, cx, cy);
 
@@ -487,13 +502,44 @@ function fileKeyFor(file) {
   return `${file.name}:${file.size}:${file.lastModified || 0}`;
 }
 
+// 文字コード判定: まずUTF-8として厳密(fatal: 不正なバイト列ならエラー)に
+// デコードを試す。Shift_JISのテキストをUTF-8として読むと、ほぼ必ずこの
+// 厳密デコードでエラーになるため、それを「Shift_JISらしい」の判定に使う。
+// (重い自前の文字コード判定処理を書かず、ブラウザ標準のTextDecoderの
+//  機能だけで判定できるため、アプリを重くしない簡潔な方法として採用)
+function decodeFileBuffer(buffer) {
+  try {
+    const utf8 = new TextDecoder("utf-8", { fatal: true });
+    let text = utf8.decode(buffer);
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // BOM除去
+    return { text, encoding: "UTF-8" };
+  } catch (e) {
+    // UTF-8として不正 → Shift_JISとして読み直す
+    const sjis = new TextDecoder("shift_jis");
+    const text = sjis.decode(buffer);
+    return { text, encoding: "Shift_JIS" };
+  }
+}
+
 els.fileInput.addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = () => loadText(reader.result, fileKeyFor(file));
+  reader.onload = () => {
+    let decoded;
+    try {
+      decoded = decodeFileBuffer(reader.result);
+    } catch (err) {
+      els.statusText.textContent = "文字コードを判別できず、読み込めませんでした。";
+      return;
+    }
+    if (decoded.encoding === "Shift_JIS") {
+      els.statusText.textContent = "Shift_JISの文字コードとして読み込みました。解析中...";
+    }
+    loadText(decoded.text, fileKeyFor(file));
+  };
   reader.onerror = () => { els.statusText.textContent = "ファイルを読み込めませんでした。"; };
-  reader.readAsText(file, "UTF-8");
+  reader.readAsArrayBuffer(file);
   els.fileInput.value = "";
 });
 
@@ -517,6 +563,8 @@ els.confirmFontBtn.addEventListener("click", () => {
     ? (els.fontFamilyCustom.value.trim() || state.fontFamily)
     : els.fontFamily.value;
   state.fontSize = parseInt(els.fontSize.value, 10);
+  state.monoColor = els.colorMode.value === "mono";
+  try { localStorage.setItem("jrsvp_mono_color", state.monoColor ? "1" : "0"); } catch (e) { /* ignore */ }
   render();
   els.settingsPanel.classList.remove("open");
   els.confirmFontBtn.blur();
@@ -569,6 +617,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 /* ---- 初期化 ---- */
+els.colorMode.value = state.monoColor ? "mono" : "red";
 resizeCanvas();
 
 if ("serviceWorker" in navigator) {
