@@ -1,15 +1,18 @@
 /* =====================================================================
-   日本語 RSVP リーダー (Web版) - app.js
-   macOSアプリ版 (jrsvp_gui.py) と同じ文節結合ロジックをJSに移植。
-   形態素解析は kuromoji.js (ブラウザで動く純JS実装) を使用し、
-   サーバーを使わずブラウザだけで完結する。
+   日本語 RSVP リーダー (Web版) - app.js  [Web Worker対応・修正版]
 
-   このファイルは index.html から <script src="app.js" defer> で読み込まれる。
+   【今回の修正点】
+   これまで kuromoji.js の辞書読み込み・構築をメインスレッドで実行していたため、
+   その間UIが完全にブロックされ「画面は出るがボタンが一切反応しない」
+   フリーズが発生していた。これを解消するため、辞書の読み込み・構築・
+   形態素解析(tokenize)を kuromoji-worker.js (Web Worker) に完全に移し、
+   メインスレッドは Worker にメッセージを送って結果を受け取るだけにした。
+   これにより、辞書構築中も画面・ボタンは常に操作可能になる。
    ===================================================================== */
 
 const ATTACH_TO_PREV_POS = new Set(["助詞", "助動詞", "接尾"]);
 const PUNCT_RE = /^[。、！？!?]+$/;
-const CLOSING_BRACKETS = new Set(["」", ")", "』", "”", "’", "》", "〉", "］", "】", "＞", "〕", '"', "'"]);
+const CLOSING_BRACKETS = new Set(["」", ")", "』", "”", "’", "》", "〉", "］", "【", "＞", "〕", '"', "'"]);
 const OPENING_BRACKETS = new Set(["「", "(", "『", "“", "‘", "《", "〈", "［", "【", "＜", "〔"]);
 
 function bunsetsuChunk(morphs) {
@@ -175,8 +178,6 @@ const els = {
 const ctx = els.canvas.getContext("2d");
 
 const state = {
-  tokenizer: null,
-  tokenizerPromise: null,
   chunks: [],
   index: 0,
   wpm: 400,
@@ -185,7 +186,90 @@ const state = {
   fontFamily: els.fontFamily.value,
   fontSize: parseInt(els.fontSize.value, 10),
   fileKey: null, // localStorage上の進捗保存キー
+  dictReady: false,
+  pendingTokenizeId: 0,
+  pendingTokenizeResolvers: new Map(),
+  pendingLoad: null, // 辞書未準備で待たされているファイル { text, fileKey }
 };
+
+/* ---------------------------------------------------------------------
+   Web Worker (kuromoji-worker.js) との通信
+   --------------------------------------------------------------------- */
+const dictWorker = new Worker("kuromoji-worker.js");
+
+dictWorker.onmessage = (e) => {
+  const msg = e.data || {};
+
+  switch (msg.type) {
+    case "status":
+      // 辞書未準備時のみステータス表示を更新 (解析中の文言を上書きしないため)
+      if (!state.chunks.length) els.statusText.textContent = msg.label;
+      break;
+
+    case "ready":
+      state.dictReady = true;
+      els.retryDictBtn.style.display = "none";
+      if (!state.chunks.length) {
+        els.statusText.textContent = "辞書の準備ができました。ファイルを開いてください。";
+      }
+      // 辞書待ちで保留されていたファイルがあれば処理を再開する
+      if (state.pendingLoad) {
+        const { text, fileKey } = state.pendingLoad;
+        state.pendingLoad = null;
+        loadText(text, fileKey);
+      }
+      break;
+
+    case "init_error":
+      state.dictReady = false;
+      els.statusText.textContent = "辞書の読み込みに失敗しました。";
+      if (state.pendingLoad) {
+        showDictError();
+      }
+      break;
+
+    case "tokenize_result": {
+      const resolver = state.pendingTokenizeResolvers.get(msg.id);
+      if (resolver) {
+        state.pendingTokenizeResolvers.delete(msg.id);
+        resolver.resolve(msg.tokens);
+      }
+      break;
+    }
+
+    case "tokenize_error": {
+      const resolver = state.pendingTokenizeResolvers.get(msg.id);
+      if (resolver) {
+        state.pendingTokenizeResolvers.delete(msg.id);
+        resolver.reject(new Error(msg.error || "形態素解析に失敗しました"));
+      }
+      break;
+    }
+  }
+};
+
+dictWorker.onerror = (err) => {
+  console.error("[main] dictWorker error:", err);
+  state.dictReady = false;
+  els.statusText.textContent = "辞書の読み込み処理でエラーが発生しました。";
+  if (state.pendingLoad) showDictError();
+};
+
+function tokenizeViaWorker(text) {
+  return new Promise((resolve, reject) => {
+    const id = ++state.pendingTokenizeId;
+    state.pendingTokenizeResolvers.set(id, { resolve, reject });
+    dictWorker.postMessage({ type: "tokenize", id, text });
+  });
+}
+
+function showDictError() {
+  els.dropHintText.textContent =
+    "辞書の読み込みに失敗しました。ネット接続を確認のうえ、" +
+    "下のボタンで再試行してください (複数のCDNを順番に試します)。";
+  els.retryDictBtn.style.display = "inline-block";
+  els.dropHint.style.display = "flex";
+}
 
 /* ---- Canvas のリサイズ (Retina対応) ---- */
 function resizeCanvas() {
@@ -222,7 +306,6 @@ function render() {
 
   const centerW = ctx.measureText(center).width;
 
-  // ガイドライン (ORP位置の目印)
   ctx.strokeStyle = "#3a4054";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
@@ -339,113 +422,31 @@ function loadProgress(key) {
   } catch (e) { return undefined; }
 }
 
-/* =====================================================================
-   kuromoji 辞書の読み込み (課題1対応: CDNフォールバック)
-
-   KUROMOJI_CDNS (index.html側で定義) を先頭から順に試し、
-   スクリプト読み込み・辞書ビルドのどちらかが失敗したら次のCDNに切り替える。
-   全て失敗した場合はユーザーに「再試行」ボタンを出す。
-   ===================================================================== */
-
-function buildTokenizerWithDicPath(dicPath) {
-  return new Promise((resolve, reject) => {
-    if (typeof kuromoji === "undefined") {
-      reject(new Error("kuromoji本体が読み込まれていません"));
-      return;
-    }
-    try {
-      kuromoji.builder({ dicPath }).build((err, tokenizer) => {
-        if (err) { reject(err); return; }
-        resolve(tokenizer);
-      });
-    } catch (syncErr) {
-      // dicPath不正やzlib展開失敗などで build() 呼び出し自体が
-      // 同期的に例外を投げるケースに対応 (コールバックが永遠に呼ばれないのを防ぐ)
-      reject(syncErr);
-    }
-  });
-}
-
-// 辞書ビルドが何らかの理由 (CORS、ネットワーク不調、gzip展開失敗など) で
-// コールバックを一切呼ばずに固まってしまうケースがあるため、
-// 一定時間で強制的にタイムアウトさせ、次のCDNへ切り替えられるようにする。
-function withTimeout(promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`タイムアウト (${label}): ${ms}ms以内に応答がありませんでした`));
-    }, ms);
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); }
-    );
-  });
-}
-
-async function ensureTokenizer() {
-  if (state.tokenizer) return state.tokenizer;
-  if (state.tokenizerPromise) return state.tokenizerPromise;
-
-  state.tokenizerPromise = (async () => {
-    let lastErr = null;
-    for (const cdn of KUROMOJI_CDNS) {
-      try {
-        els.statusText.textContent = `辞書を読み込み中... (${cdn.label})`;
-        await withTimeout(loadScriptOnce(cdn.scriptUrl), 8000, `${cdn.label} スクリプト`);
-        const tokenizer = await withTimeout(
-          buildTokenizerWithDicPath(cdn.dicPath), 20000, `${cdn.label} 辞書ビルド`
-        );
-        state.tokenizer = tokenizer;
-        return tokenizer;
-      } catch (e) {
-        console.warn(`kuromoji CDN失敗 (${cdn.label}):`, e);
-        lastErr = e;
-        els.statusText.textContent = `${cdn.label} で失敗。次のCDNを試します...`;
-        // 失敗したスクリプトタグは次回再試行時に再ロードできるよう削除する
-        document.querySelectorAll(`script[data-kuromoji-src="${cdn.scriptUrl}"]`)
-          .forEach((s) => s.remove());
-        if (typeof kuromoji !== "undefined") {
-          try { delete window.kuromoji; } catch (_) { /* ignore */ }
-        }
-        continue;
-      }
-    }
-    throw lastErr || new Error("すべてのCDNで辞書読み込みに失敗しました");
-  })();
-
-  try {
-    return await state.tokenizerPromise;
-  } finally {
-    state.tokenizerPromise = null;
-  }
-}
-
-/* ---- ファイル読み込み・形態素解析 ---- */
+/* ---- ファイル読み込み・形態素解析 (Worker経由) ---- */
 async function loadText(text, fileKey) {
   els.dropHint.style.display = "none";
+
+  if (!state.dictReady) {
+    // 辞書がまだ準備できていない場合は、準備完了後に自動で処理を再開する
+    state.pendingLoad = { text, fileKey };
+    els.statusText.textContent = "辞書の準備中です。準備ができたら自動的に解析を始めます...";
+    return;
+  }
+
   els.statusText.textContent = "解析中...";
   clearTimer();
 
-  let tokenizer;
+  let tokens;
   try {
-    tokenizer = await ensureTokenizer();
+    tokens = await tokenizeViaWorker(text);
   } catch (e) {
-    els.statusText.textContent = "辞書の読み込みに失敗しました。";
-    els.dropHintText.textContent =
-      "辞書の読み込みに失敗しました。ネット接続を確認のうえ、" +
-      "下のボタンで再試行してください (複数のCDNを順番に試します)。";
-    els.retryDictBtn.style.display = "inline-block";
-    els.retryDictBtn.dataset.pendingText = text;
-    els.retryDictBtn.dataset.pendingKey = fileKey;
+    console.error(e);
+    els.statusText.textContent = "解析中にエラーが発生しました。";
     els.dropHint.style.display = "flex";
     return;
   }
 
-  els.retryDictBtn.style.display = "none";
-
-  const tokens = tokenizer.tokenize(text);
-  const morphs = tokens.map(t => ({ surface: t.surface_form, pos: t.pos }));
-
-  let chunkRecords = bunsetsuChunk(morphs);
+  let chunkRecords = bunsetsuChunk(tokens);
   chunkRecords = mergeShortChunks(chunkRecords);
   const chunks = chunkRecords.filter(c => c.text);
 
@@ -476,22 +477,13 @@ async function loadText(text, fileKey) {
 }
 
 els.retryDictBtn.addEventListener("click", () => {
-  const text = els.retryDictBtn.dataset.pendingText;
-  const key = els.retryDictBtn.dataset.pendingKey;
-  if (typeof text === "string") {
-    loadText(text, key);
-  } else {
-    // 保留中のファイルが無い場合は、単に辞書だけ先読みしておく
-    els.statusText.textContent = "辞書を再読み込み中...";
-    ensureTokenizer()
-      .then(() => { els.statusText.textContent = "辞書の読み込みに成功しました。ファイルを開いてください。"; els.retryDictBtn.style.display = "none"; })
-      .catch(() => { els.statusText.textContent = "再試行しましたが、読み込みに失敗しました。"; });
-  }
+  els.retryDictBtn.style.display = "none";
+  els.statusText.textContent = "辞書を再読み込み中...";
+  // Workerを使い捨てにして再生成すると確実に状態がリセットされる
+  location.reload();
 });
 
 function fileKeyFor(file) {
-  // ブラウザではファイルの絶対パスが取れないため、名前+サイズ+更新日時を
-  // キーにして「同じファイル」を識別する (簡易的だが実用上十分)。
   return `${file.name}:${file.size}:${file.lastModified || 0}`;
 }
 
@@ -502,7 +494,6 @@ els.fileInput.addEventListener("change", (e) => {
   reader.onload = () => loadText(reader.result, fileKeyFor(file));
   reader.onerror = () => { els.statusText.textContent = "ファイルを読み込めませんでした。"; };
   reader.readAsText(file, "UTF-8");
-  // 同じファイルを連続で選び直せるよう、毎回値をリセットしておく
   els.fileInput.value = "";
 });
 
@@ -541,21 +532,17 @@ els.seekFwdBtn.addEventListener("click", () => { seek(1); els.seekFwdBtn.blur();
 els.speedUpBtn.addEventListener("click", () => { changeSpeed(20); els.speedUpBtn.blur(); });
 els.speedDownBtn.addEventListener("click", () => { changeSpeed(-20); els.speedDownBtn.blur(); });
 
-/* タップでも再生中央キャンバスで一時停止/再開できるようにする。
-   課題5対応: 誤タップによる意図しない一時停止を減らすため、
-   タップ後ごく短い間隔での連続タップ(誤反応)を無視する。 */
 let lastCanvasTapAt = 0;
 els.canvas.addEventListener("click", () => {
   const now = Date.now();
-  if (now - lastCanvasTapAt < 250) return; // ダブルタップ等のチャタリング防止
+  if (now - lastCanvasTapAt < 250) return;
   lastCanvasTapAt = now;
   togglePause();
 });
 
-/* ---- キーボード操作 (外付けキーボード接続時; Space/矢印/q) ---- */
 window.addEventListener("keydown", (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
-  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return; // 入力中は無効化
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
 
   switch (e.key) {
     case " ":
@@ -588,14 +575,6 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 
-// 起動直後にバックグラウンドで辞書読み込みを開始しておく
-// (ファイルを開くまで待たず、先に準備しておくことで実際の解析を速くする)
-ensureTokenizer()
-  .then(() => {
-    if (!state.chunks.length) {
-      els.statusText.textContent = "辞書の準備ができました。ファイルを開いてください。";
-    }
-  })
-  .catch(() => {
-    els.statusText.textContent = "辞書の事前読み込みに失敗しました (ファイルを開く際に再試行します)。";
-  });
+// メインスレッドをブロックせず、Workerに辞書の準備を指示する
+els.statusText.textContent = "辞書を準備中です...";
+dictWorker.postMessage({ type: "init" });

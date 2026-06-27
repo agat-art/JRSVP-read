@@ -164,9 +164,6 @@
   .transport{
     display:flex; align-items:center; justify-content:center; gap:8px;
   }
-  /* タッチ操作のしやすさ向上 (課題5対応):
-     ボタンの実タップ領域を最低44x44pt相当に拡大する。
-     見た目のpaddingは変えず、当たり判定だけ広げる。 */
   .transport button{
     flex: 0 0 auto;
     min-width: 46px;
@@ -254,46 +251,12 @@
 
 <input type="file" id="fileInput" accept=".txt,text/plain" style="display:none;">
 
-<script>
-/* =====================================================================
-   kuromoji.js のロード (CDNフォールバック対応)
-
-   課題1対応: jsdelivr経由の辞書ファイル(.dat.gz)読み込みが失敗する
-   ケースが報告されているため、kuromoji.js 本体・辞書のCDNを複数用意し、
-   最初のCDNが失敗したら次のCDNに自動的に切り替える。
-   ===================================================================== */
-const KUROMOJI_CDNS = [
-  {
-    label: "jsdelivr",
-    scriptUrl: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js",
-    dicPath: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/",
-  },
-  {
-    label: "unpkg",
-    scriptUrl: "https://unpkg.com/kuromoji@0.1.2/build/kuromoji.js",
-    dicPath: "https://unpkg.com/kuromoji@0.1.2/dict/",
-  },
-  {
-    label: "cdnjs (jsdelivr dict)",
-    scriptUrl: "https://cdnjs.cloudflare.com/ajax/libs/kuromoji/0.1.2/kuromoji.js",
-    dicPath: "https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/",
-  },
-];
-
-function loadScriptOnce(url) {
-  return new Promise((resolve, reject) => {
-    const existing = document.querySelector(`script[data-kuromoji-src="${url}"]`);
-    if (existing) { resolve(); return; }
-    const s = document.createElement("script");
-    s.src = url;
-    s.async = true;
-    s.dataset.kuromojiSrc = url;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error(`スクリプト読み込み失敗: ${url}`));
-    document.head.appendChild(s);
-  });
-}
-</script>
+<!--
+  注: 以前ここにあった kuromoji 読み込み用のインラインスクリプト
+  (KUROMOJI_CDNS, loadScriptOnce など) は削除しました。
+  辞書のCDN読み込み・構築処理はすべて kuromoji-worker.js (Web Worker) に
+  移したため、メインスレッド側でこれらを定義する必要がなくなったためです。
+-->
 <script src="app.js" defer></script>
 </body>
 </html>
