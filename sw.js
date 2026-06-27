@@ -7,12 +7,13 @@
 // バージョン番号を上げること (古いキャッシュが優先されて更新が反映されない
 // 事故を防ぐため)。
 
-const CACHE_NAME = "jrsvp-shell-v5";
+const CACHE_NAME = "jrsvp-shell-v6";
 const SHELL_FILES = [
   "./",
   "./index.html",
   "./app.js",
   "./kuromoji-worker.js",
+  "./lib/kuromoji.js",
   "./manifest.json",
   "./icon-180.png",
   "./icon-192.png",
