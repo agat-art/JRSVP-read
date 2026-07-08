@@ -6,6 +6,7 @@
 <title>日本語 RSVP リーダー</title>
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#14161c">
@@ -13,177 +14,86 @@
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Serif+JP:wght@500;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg: #14161c;
-    --surface: #1e212b;
-    --surface-alt: #262a37;
-    --line: #343a4a;
-    --text: #f1eee6;
-    --text-dim: #8b93a6;
-    --accent: #e2543b;
-    --accent-soft: #f0a98f;
-    --ui-font: "Hiragino Sans", "Noto Sans JP", -apple-system, system-ui, sans-serif;
+    --bg:#14161c; --surface:#1e212b; --surface-alt:#262a37; --line:#343a4a;
+    --text:#f1eee6; --text-dim:#8b93a6; --accent:#e2543b; --accent-soft:#f0a98f;
+    --ui-font:"Hiragino Sans","Noto Sans JP",-apple-system,system-ui,sans-serif;
   }
-  *{ box-sizing: border-box; }
-  html,body{
-    margin:0; padding:0; height:100%;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--ui-font);
-    -webkit-tap-highlight-color: transparent;
-    overscroll-behavior: none;
-  }
-  body{
-    display:flex; flex-direction:column;
-    height:100vh; height:100dvh;
-  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; height:100%; background:var(--bg); color:var(--text); font-family:var(--ui-font); -webkit-tap-highlight-color:transparent; overscroll-behavior:none; }
+  body{ display:flex; flex-direction:column; height:100vh; height:100dvh; }
 
-  /* ---------- ヘッダー ---------- */
-  header{
-    display:flex; align-items:center; gap:10px;
-    padding: max(10px, env(safe-area-inset-top)) 14px 10px 14px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--line);
-    flex-wrap: wrap;
-  }
-  .brand{
-    font-family: "Noto Serif JP", serif;
-    font-weight:700; font-size:15px;
-    color: var(--accent-soft);
-    letter-spacing: .05em;
-    margin-right: 6px;
-    white-space: nowrap;
-  }
+  /* ヘッダー */
+  header{ display:flex; align-items:center; gap:8px; padding:max(10px,env(safe-area-inset-top)) 10px 10px; background:var(--surface); border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .brand{ font-family:"Noto Serif JP",serif; font-weight:700; font-size:14px; color:var(--accent-soft); letter-spacing:.05em; white-space:nowrap; }
   header .spacer{ flex:1; }
-  button, .btn{
-    font-family: var(--ui-font);
-    background: var(--surface-alt);
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 7px 12px;
-    font-size: 14px;
-    cursor: pointer;
-    user-select: none;
-    -webkit-user-select: none;
-  }
-  button:active{ background: #30364a; }
-  button.primary{
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #1b0d09;
-    font-weight: 600;
-  }
-  button.primary:active{ background: #c8492f; }
-  button.icon{
-    padding: 7px 10px;
-    font-size: 16px;
-    line-height: 1;
-  }
+  button,.btn{ font-family:var(--ui-font); background:var(--surface-alt); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 12px; font-size:14px; cursor:pointer; user-select:none; -webkit-user-select:none; }
+  button:active{ background:#30364a; }
+  button.primary{ background:var(--accent); border-color:var(--accent); color:#1b0d09; font-weight:600; }
+  button.primary:active{ background:#c8492f; }
+  button.icon{ padding:7px 10px; font-size:16px; line-height:1; }
   #gearBtn{ font-size:18px; }
 
-  /* ---------- 設定パネル ---------- */
-  #settingsPanel{
-    background: var(--surface);
-    border-bottom: 1px solid var(--line);
-    padding: 10px 14px 14px;
-    display: none;
-    flex-direction: column;
-    gap: 10px;
-  }
+  /* 設定パネル */
+  #settingsPanel{ background:var(--surface); border-bottom:1px solid var(--line); padding:10px 14px 14px; display:none; flex-direction:column; gap:10px; }
   #settingsPanel.open{ display:flex; }
-  .row{
-    display:flex; align-items:center; gap:8px; flex-wrap: wrap;
-  }
-  .row label{
-    font-size: 12px; color: var(--text-dim);
-    min-width: 64px;
-  }
-  select, input[type=text], input[type=number]{
-    font-family: var(--ui-font);
-    background: var(--surface-alt);
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 7px 10px;
-    font-size: 14px;
-  }
-  select{ max-width: 220px; }
-  input[type=number]{ width: 70px; }
-  input[type=range]{ flex:1; accent-color: var(--accent); }
+  .row{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .row label{ font-size:12px; color:var(--text-dim); min-width:64px; }
+  select,input[type=text],input[type=number]{ font-family:var(--ui-font); background:var(--surface-alt); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:14px; }
+  select{ max-width:220px; }
+  input[type=number]{ width:70px; }
+  input[type=range]{ flex:1; accent-color:var(--accent); }
 
-  /* ---------- 表示エリア ---------- */
-  main{
-    flex: 1;
-    display:flex;
-    align-items:center; justify-content:center;
-    position: relative;
-    overflow: hidden;
-  }
-  #readerCanvas{
-    width: 100%; height: 100%;
-    display:block;
-    touch-action: manipulation;
-  }
-  #dropHint{
-    position:absolute; inset:0;
-    display:flex; flex-direction:column; align-items:center; justify-content:center;
-    gap: 14px;
-    color: var(--text-dim);
-    text-align:center;
-    padding: 24px;
-  }
-  #dropHint .glyph{
-    font-family: "Noto Serif JP", serif;
-    font-size: 64px;
-    color: var(--accent);
-    line-height: 1;
-  }
-  #dropHint p{ margin:0; font-size:14px; max-width: 320px; line-height:1.7; }
+  /* 検索パネル */
+  #searchPanel{ background:var(--surface); border-bottom:1px solid var(--line); padding:8px 10px; display:none; align-items:center; gap:8px; }
+  #searchPanel.open{ display:flex; }
+  #searchInput{ flex:1; min-width:0; }
+  #searchCount{ font-size:12px; color:var(--text-dim); white-space:nowrap; min-width:72px; text-align:center; }
+  #searchPrevBtn,#searchNextBtn,#searchCloseBtn{ min-width:36px; min-height:36px; padding:5px 8px; font-size:14px; }
+
+  /* メイン表示エリア */
+  main{ flex:1; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; }
+  #readerCanvas{ width:100%; height:100%; display:block; touch-action:manipulation; }
+  #dropHint{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; color:var(--text-dim); text-align:center; padding:24px; }
+  #dropHint .glyph{ font-family:"Noto Serif JP",serif; font-size:64px; color:var(--accent); line-height:1; }
+  #dropHint p{ margin:0; font-size:14px; max-width:320px; line-height:1.7; }
   #dropHint .retryBtn{ display:none; }
 
-  /* ---------- フッター(トランスポート) ---------- */
-  footer{
-    background: var(--surface);
-    border-top: 1px solid var(--line);
-    padding: 10px 14px max(10px, env(safe-area-inset-bottom));
-    display:flex; flex-direction:column; gap:8px;
-  }
-  .statusRow{
-    display:flex; justify-content:space-between; align-items:center;
-    font-size: 12px; color: var(--text-dim);
-    gap: 10px;
-  }
+  /* フッター */
+  footer{ background:var(--surface); border-top:1px solid var(--line); padding:10px 14px max(10px,env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:8px; }
+  .statusRow{ display:flex; justify-content:space-between; align-items:center; font-size:12px; color:var(--text-dim); gap:10px; }
   #statusText{ flex:1; }
-  .progressBar{
-    height: 3px; background: var(--line); border-radius: 2px; overflow:hidden;
-  }
-  .progressBar > div{
-    height:100%; background: var(--accent); width:0%;
-    transition: width .15s linear;
-  }
-  .transport{
-    display:flex; align-items:center; justify-content:center; gap:8px;
-  }
-  .transport button{
-    flex: 0 0 auto;
-    min-width: 46px;
-    min-height: 44px;
-    position: relative;
-  }
-  .transport button::after{
-    content: "";
-    position: absolute;
-    inset: -6px;
-  }
-  .transport .gap{ flex:1; max-width: 18px; }
-  .jumpRow{
-    display:flex; align-items:center; justify-content:center; gap:6px;
-  }
-  .jumpRow input{ width: 70px; text-align:center; }
+  .progressBar{ height:3px; background:var(--line); border-radius:2px; overflow:hidden; }
+  .progressBar>div{ height:100%; background:var(--accent); width:0%; transition:width .15s linear; }
+  .transport{ display:flex; align-items:center; justify-content:center; gap:8px; }
+  .transport button{ flex:0 0 auto; min-width:46px; min-height:44px; position:relative; }
+  .transport button::after{ content:""; position:absolute; inset:-6px; }
+  .jumpRow{ display:flex; align-items:center; justify-content:center; gap:6px; }
+  .jumpRow input{ width:70px; text-align:center; }
 
-  @media (min-width: 700px){
-    .brand{ font-size:17px; }
-  }
+  /* モーダル共通 */
+  .modal-overlay{ position:fixed; inset:0; background:rgba(0,0,0,.65); display:flex; align-items:flex-end; justify-content:center; z-index:200; }
+  .modal-overlay.hidden{ display:none; }
+  .modal-box{ background:var(--surface); border-radius:16px 16px 0 0; width:100%; max-width:640px; max-height:75vh; display:flex; flex-direction:column; overflow:hidden; padding-bottom:env(safe-area-inset-bottom); }
+  .modal-header{ display:flex; align-items:center; padding:14px 16px 10px; border-bottom:1px solid var(--line); }
+  .modal-title{ flex:1; font-weight:700; font-size:15px; }
+  .modal-body{ overflow-y:auto; flex:1; }
+  .modal-footer{ padding:10px 16px 14px; border-top:1px solid var(--line); display:flex; gap:8px; flex-wrap:wrap; }
+
+  /* 目次 */
+  .toc-item{ display:block; width:100%; text-align:left; padding:11px 16px; background:none; border:none; border-bottom:1px solid var(--line); color:var(--text); cursor:pointer; font-family:var(--ui-font); font-size:14px; line-height:1.5; border-radius:0; }
+  .toc-item:active{ background:var(--surface-alt); }
+  .toc-item.chapter{ color:var(--accent-soft); font-weight:700; }
+  .toc-num{ font-size:11px; color:var(--text-dim); margin-left:8px; }
+
+  /* しおり */
+  .bookmark-item{ display:flex; align-items:center; padding:10px 16px; gap:10px; border-bottom:1px solid var(--line); }
+  .bookmark-info{ flex:1; min-width:0; }
+  .bookmark-title{ font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .bookmark-meta{ font-size:11px; color:var(--text-dim); margin-top:2px; }
+  .bookmark-actions{ display:flex; gap:6px; flex-shrink:0; }
+  .bookmark-actions button{ padding:5px 10px; font-size:13px; }
+
+  @media (min-width:700px){ .brand{ font-size:16px; } }
 </style>
 </head>
 <body>
@@ -192,31 +102,44 @@
   <span class="brand">日本語 RSVP リーダー</span>
   <div class="spacer"></div>
   <button id="openFileBtn">ファイルを開く</button>
+  <button id="tocBtn" class="icon" title="目次">目次</button>
+  <button id="searchBtn" class="icon" title="検索 (F)">🔍</button>
+  <button id="bookmarkBtn" class="icon" title="しおり">🔖</button>
   <button id="gearBtn" class="icon" title="設定">⚙</button>
 </header>
 
+<!-- 検索パネル -->
+<div id="searchPanel">
+  <input type="text" id="searchInput" placeholder="検索ワードを入力 → Enterで検索">
+  <span id="searchCount"></span>
+  <button id="searchPrevBtn" class="icon" title="前の結果">↑</button>
+  <button id="searchNextBtn" class="icon" title="次の結果">↓</button>
+  <button id="searchCloseBtn" class="icon" title="閉じる">✕</button>
+</div>
+
+<!-- 設定パネル -->
 <div id="settingsPanel">
   <div class="row">
     <label>フォント</label>
     <select id="fontFamily">
-      <option value='"Hiragino Mincho ProN", "Noto Serif JP", serif'>明朝 (Hiragino Mincho / Noto Serif JP)</option>
-      <option value='"Hiragino Sans", "Noto Sans JP", sans-serif' selected>ゴシック (Hiragino Sans / Noto Sans JP)</option>
-      <option value='"Yu Mincho", "YuMincho", serif'>游明朝 (Yu Mincho)</option>
-      <option value='"Yu Gothic", "Meiryo", sans-serif'>游ゴシック / メイリオ</option>
+      <option value='"Hiragino Mincho ProN","Noto Serif JP",serif'>明朝 (Hiragino Mincho / Noto Serif JP)</option>
+      <option value='"Hiragino Sans","Noto Sans JP",sans-serif' selected>ゴシック (Hiragino Sans / Noto Sans JP)</option>
+      <option value='"Yu Mincho","YuMincho",serif'>游明朝 (Yu Mincho)</option>
+      <option value='"Yu Gothic","Meiryo",sans-serif'>游ゴシック / メイリオ</option>
       <option value="__custom__">カスタム入力...</option>
     </select>
-    <input type="text" id="fontFamilyCustom" placeholder="フォント名を入力" style="display:none; flex:1; min-width:140px;">
+    <input type="text" id="fontFamilyCustom" placeholder="フォント名を入力" style="display:none;flex:1;min-width:140px;">
   </div>
   <div class="row">
     <label>サイズ</label>
     <input type="range" id="fontSize" min="20" max="120" step="2" value="56">
-    <span id="fontSizeLabel" style="width:46px; text-align:right; font-size:13px; color:var(--text-dim);">56px</span>
+    <span id="fontSizeLabel" style="width:46px;text-align:right;font-size:13px;color:var(--text-dim);">56px</span>
   </div>
   <div class="row">
     <label>文字色</label>
     <select id="colorMode">
-      <option value="red">中央の文字を赤くする(デフォルト)</option>
-      <option value="mono">単色(白)にする</option>
+      <option value="red">中央の文字を赤くする（デフォルト）</option>
+      <option value="mono">単色（白）にする</option>
     </select>
   </div>
   <div class="row">
@@ -234,8 +157,7 @@
     <div class="glyph">読</div>
     <p id="dropHintText">
       右上の「ファイルを開く」からテキストファイル(.txt)を選んでください。<br>
-      iPadやiPhoneでは「ファイル」アプリ経由でGoogleドライブ上のファイルも選べます
-      (Googleドライブをファイルの保存先として有効にしている場合)。
+      iPadやiPhoneでは「ファイル」アプリ経由でGoogleドライブ上のファイルも選べます。
     </p>
     <button id="retryDictBtn" class="retryBtn primary">辞書の読み込みを再試行</button>
   </div>
@@ -256,14 +178,34 @@
   </div>
 </footer>
 
-<input type="file" id="fileInput" accept=".txt,text/plain" style="display:none;">
+<!-- 目次モーダル -->
+<div id="tocOverlay" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">目次</span>
+      <button id="tocCloseBtn" class="icon">✕</button>
+    </div>
+    <div id="tocBody" class="modal-body"></div>
+  </div>
+</div>
 
-<!--
-  注: 以前ここにあった kuromoji 読み込み用のインラインスクリプト
-  (KUROMOJI_CDNS, loadScriptOnce など) は削除しました。
-  辞書のCDN読み込み・構築処理はすべて kuromoji-worker.js (Web Worker) に
-  移したため、メインスレッド側でこれらを定義する必要がなくなったためです。
--->
+<!-- しおりモーダル -->
+<div id="bookmarkOverlay" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">しおり</span>
+      <button id="bookmarkCloseBtn" class="icon">✕</button>
+    </div>
+    <div id="bookmarkBody" class="modal-body"></div>
+    <div class="modal-footer">
+      <button id="saveBookmarkBtn" class="primary">現在位置を保存</button>
+      <button id="exportBookmarkBtn">エクスポート（コピー）</button>
+      <button id="importBookmarkBtn">インポート（貼り付け）</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="fileInput" accept=".txt,text/plain" style="display:none;">
 <script src="app.js" defer></script>
 </body>
 </html>

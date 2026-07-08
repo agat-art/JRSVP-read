@@ -1,19 +1,13 @@
 /* =====================================================================
-   日本語 RSVP リーダー (Web版) - app.js  [Web Worker対応・修正版]
-
-   【今回の修正点】
-   これまで kuromoji.js の辞書読み込み・構築をメインスレッドで実行していたため、
-   その間UIが完全にブロックされ「画面は出るがボタンが一切反応しない」
-   フリーズが発生していた。これを解消するため、辞書の読み込み・構築・
-   形態素解析(tokenize)を kuromoji-worker.js (Web Worker) に完全に移し、
-   メインスレッドは Worker にメッセージを送って結果を受け取るだけにした。
-   これにより、辞書構築中も画面・ボタンは常に操作可能になる。
+   日本語 RSVP リーダー (Web版) - app.js
+   [目次・検索・しおり機能追加版]
    ===================================================================== */
 
+/* ---- 文節結合ロジック ---- */
 const ATTACH_TO_PREV_POS = new Set(["助詞", "助動詞", "接尾"]);
 const PUNCT_RE = /^[。、！？!?]+$/;
-const CLOSING_BRACKETS = new Set(["」", ")", "』", "”", "’", "》", "〉", "］", "【", "＞", "〕", '"', "'"]);
-const OPENING_BRACKETS = new Set(["「", "(", "『", "“", "‘", "《", "〈", "［", "【", "＜", "〔"]);
+const CLOSING_BRACKETS = new Set(["」",")",  "』", "\u201D", "\u2019", "》", "〉", "］", "】", "＞", "〕", '"', "'"]);
+const OPENING_BRACKETS = new Set(["「", "(", "『", "\u201C", "\u2018", "《", "〈", "［", "【", "＜", "〔"]);
 
 function bunsetsuChunk(morphs) {
   const chunks = [];
@@ -22,7 +16,10 @@ function bunsetsuChunk(morphs) {
   let forceAttachNext = false;
 
   function flush() {
-    if (curText) chunks.push({ text: curText, morphs: curMorphs });
+    if (curText) {
+      const charStart = curMorphs.length ? (curMorphs[0].start ?? 0) : 0;
+      chunks.push({ text: curText, morphs: curMorphs, charStart });
+    }
     curText = "";
     curMorphs = [];
   }
@@ -35,24 +32,13 @@ function bunsetsuChunk(morphs) {
     const isOpening = OPENING_BRACKETS.has(surface);
 
     if (curText === "") {
-      curText = surface;
-      curMorphs.push(m);
-      forceAttachNext = isOpening;
+      curText = surface; curMorphs.push(m); forceAttachNext = isOpening;
     } else if (ATTACH_TO_PREV_POS.has(pos) || isPunct || isClosing || forceAttachNext) {
-      curText += surface;
-      curMorphs.push(m);
-      forceAttachNext = isOpening;
+      curText += surface; curMorphs.push(m); forceAttachNext = isOpening;
     } else {
-      flush();
-      curText = surface;
-      curMorphs.push(m);
-      forceAttachNext = isOpening;
+      flush(); curText = surface; curMorphs.push(m); forceAttachNext = isOpening;
     }
-
-    if (isPunct) {
-      flush();
-      forceAttachNext = false;
-    }
+    if (isPunct) { flush(); forceAttachNext = false; }
   }
   flush();
   return chunks;
@@ -66,85 +52,48 @@ function endsSentence(text) { return /[。！？!?、,]$/.test(text); }
 function mergeShortChunks(chunksIn, shortLen = 4, maxLen = 8) {
   const targetLen = 5;
   let chunks = chunksIn;
-
   for (let pass = 0; pass < 5; pass++) {
-    const result = [];
-    let i = 0;
-    let changed = false;
-    const n = chunks.length;
-
+    const result = []; let i = 0; let changed = false; const n = chunks.length;
     while (i < n) {
       const cur = chunks[i];
-
-      if (cur.text.length > shortLen || n === 1) {
-        result.push(cur);
-        i++;
-        continue;
-      }
-
+      if (cur.text.length > shortLen || n === 1) { result.push(cur); i++; continue; }
       const prev = result.length ? result[result.length - 1] : null;
       const next = i + 1 < n ? chunks[i + 1] : null;
-
       const prevOk = prev && !endsSentence(prev.text) && (prev.text.length + cur.text.length) <= maxLen;
       const nextOk = next && !endsSentence(cur.text) && (cur.text.length + next.text.length) <= maxLen;
-
       const prevNoun = prevOk && isNoun(lastPos(prev)) && isNoun(firstPos(cur));
       const nextNoun = nextOk && isNoun(lastPos(cur)) && isNoun(firstPos(next));
-
       if (prevNoun && !nextNoun) {
-        prev.text += cur.text;
-        prev.morphs = prev.morphs.concat(cur.morphs);
-        i++; changed = true;
+        prev.text += cur.text; prev.morphs = prev.morphs.concat(cur.morphs); i++; changed = true;
       } else if (nextNoun && !prevNoun) {
-        result.push({ text: cur.text + next.text, morphs: cur.morphs.concat(next.morphs) });
-        i += 2; changed = true;
+        result.push({ text: cur.text + next.text, morphs: cur.morphs.concat(next.morphs), charStart: cur.charStart }); i += 2; changed = true;
       } else if (prevOk && next && nextOk) {
-        const lenPrev = prev.text.length + cur.text.length;
-        const lenNext = cur.text.length + next.text.length;
+        const lenPrev = prev.text.length + cur.text.length, lenNext = cur.text.length + next.text.length;
         if (Math.abs(lenPrev - targetLen) <= Math.abs(lenNext - targetLen)) {
-          prev.text += cur.text;
-          prev.morphs = prev.morphs.concat(cur.morphs);
-          i++;
+          prev.text += cur.text; prev.morphs = prev.morphs.concat(cur.morphs); i++;
         } else {
-          result.push({ text: cur.text + next.text, morphs: cur.morphs.concat(next.morphs) });
-          i += 2;
+          result.push({ text: cur.text + next.text, morphs: cur.morphs.concat(next.morphs), charStart: cur.charStart }); i += 2;
         }
         changed = true;
       } else if (prevOk) {
-        prev.text += cur.text;
-        prev.morphs = prev.morphs.concat(cur.morphs);
-        i++; changed = true;
+        prev.text += cur.text; prev.morphs = prev.morphs.concat(cur.morphs); i++; changed = true;
       } else if (nextOk) {
-        result.push({ text: cur.text + next.text, morphs: cur.morphs.concat(next.morphs) });
-        i += 2; changed = true;
-      } else {
-        result.push(cur);
-        i++;
-      }
+        result.push({ text: cur.text + next.text, morphs: cur.morphs.concat(next.morphs), charStart: cur.charStart }); i += 2; changed = true;
+      } else { result.push(cur); i++; }
     }
-    chunks = result;
-    if (!changed) break;
+    chunks = result; if (!changed) break;
   }
   return chunks;
 }
 
 function orpPosition(len) {
-  // len はコードポイント数 (サロゲートペアを1文字として数えた長さ)
   if (len <= 1) return 0;
   let pos = Math.round(len * 0.35);
   if (pos < 0) pos = 0;
   if (pos >= len) pos = len - 1;
   return pos;
 }
-
-// 稀な漢字・記号・絵文字などはUTF-16で2コードユニット(サロゲートペア)に
-// なることがある。.length や .slice() はコードユニット単位のため、
-// そのまま使うとペアの真ん中で文字が分断されてしまい、ORP表示の位置が
-// おかしくなる(文字が右に寄り、左に空白ができる)原因になっていた。
-// Array.from() はコードポイント単位で分割するため、この問題を回避できる。
-function toCodePointArray(str) {
-  return Array.from(str);
-}
+function toCodePointArray(str) { return Array.from(str); }
 
 function durationMsFor(chunk, wpm) {
   const len = Math.max(1, chunk.length);
@@ -157,7 +106,6 @@ function durationMsFor(chunk, wpm) {
 }
 
 /* ===================== アプリ本体 ===================== */
-
 const els = {
   canvas: document.getElementById("readerCanvas"),
   dropHint: document.getElementById("dropHint"),
@@ -183,6 +131,25 @@ const els = {
   seekFwdBtn: document.getElementById("seekFwdBtn"),
   speedUpBtn: document.getElementById("speedUpBtn"),
   speedDownBtn: document.getElementById("speedDownBtn"),
+  // 新規
+  tocBtn: document.getElementById("tocBtn"),
+  searchBtn: document.getElementById("searchBtn"),
+  bookmarkBtn: document.getElementById("bookmarkBtn"),
+  searchPanel: document.getElementById("searchPanel"),
+  searchInput: document.getElementById("searchInput"),
+  searchCount: document.getElementById("searchCount"),
+  searchPrevBtn: document.getElementById("searchPrevBtn"),
+  searchNextBtn: document.getElementById("searchNextBtn"),
+  searchCloseBtn: document.getElementById("searchCloseBtn"),
+  tocOverlay: document.getElementById("tocOverlay"),
+  tocBody: document.getElementById("tocBody"),
+  tocCloseBtn: document.getElementById("tocCloseBtn"),
+  bookmarkOverlay: document.getElementById("bookmarkOverlay"),
+  bookmarkBody: document.getElementById("bookmarkBody"),
+  bookmarkCloseBtn: document.getElementById("bookmarkCloseBtn"),
+  saveBookmarkBtn: document.getElementById("saveBookmarkBtn"),
+  exportBookmarkBtn: document.getElementById("exportBookmarkBtn"),
+  importBookmarkBtn: document.getElementById("importBookmarkBtn"),
 };
 
 const ctx = els.canvas.getContext("2d");
@@ -196,69 +163,53 @@ const state = {
   fontFamily: els.fontFamily.value,
   fontSize: parseInt(els.fontSize.value, 10),
   monoColor: localStorage.getItem("jrsvp_mono_color") === "1",
-  fileKey: null, // localStorage上の進捗保存キー
+  fileKey: null,
+  fileName: "",
+  originalText: "",
+  headings: [],
+  searchMatches: [],
+  searchMatchIdx: -1,
   dictReady: false,
   pendingTokenizeId: 0,
   pendingTokenizeResolvers: new Map(),
-  pendingLoad: null, // 辞書未準備で待たされているファイル { text, fileKey }
+  pendingLoad: null,
 };
 
-/* ---------------------------------------------------------------------
-   Web Worker (kuromoji-worker.js) との通信
-   --------------------------------------------------------------------- */
+/* ---- Web Worker ---- */
 const dictWorker = new Worker("kuromoji-worker.js");
-
 dictWorker.onmessage = (e) => {
   const msg = e.data || {};
-
   switch (msg.type) {
     case "status":
-      // 辞書未準備時のみステータス表示を更新 (解析中の文言を上書きしないため)
       if (!state.chunks.length) els.statusText.textContent = msg.label;
       break;
-
     case "ready":
       state.dictReady = true;
       els.retryDictBtn.style.display = "none";
-      if (!state.chunks.length) {
-        els.statusText.textContent = "辞書の準備ができました。ファイルを開いてください。";
-      }
-      // 辞書待ちで保留されていたファイルがあれば処理を再開する
+      if (!state.chunks.length) els.statusText.textContent = "辞書の準備ができました。ファイルを開いてください。";
       if (state.pendingLoad) {
-        const { text, fileKey } = state.pendingLoad;
+        const { text, fileKey, fileName } = state.pendingLoad;
         state.pendingLoad = null;
-        loadText(text, fileKey);
+        loadText(text, fileKey, fileName);
       }
       break;
-
     case "init_error":
       state.dictReady = false;
       els.statusText.textContent = "辞書の読み込みに失敗しました。";
-      if (state.pendingLoad) {
-        showDictError();
-      }
+      if (state.pendingLoad) showDictError();
       break;
-
     case "tokenize_result": {
-      const resolver = state.pendingTokenizeResolvers.get(msg.id);
-      if (resolver) {
-        state.pendingTokenizeResolvers.delete(msg.id);
-        resolver.resolve(msg.tokens);
-      }
+      const r = state.pendingTokenizeResolvers.get(msg.id);
+      if (r) { state.pendingTokenizeResolvers.delete(msg.id); r.resolve(msg.tokens); }
       break;
     }
-
     case "tokenize_error": {
-      const resolver = state.pendingTokenizeResolvers.get(msg.id);
-      if (resolver) {
-        state.pendingTokenizeResolvers.delete(msg.id);
-        resolver.reject(new Error(msg.error || "形態素解析に失敗しました"));
-      }
+      const r = state.pendingTokenizeResolvers.get(msg.id);
+      if (r) { state.pendingTokenizeResolvers.delete(msg.id); r.reject(new Error(msg.error || "形態素解析に失敗")); }
       break;
     }
   }
 };
-
 dictWorker.onerror = (err) => {
   console.error("[main] dictWorker error:", err);
   state.dictReady = false;
@@ -275,14 +226,12 @@ function tokenizeViaWorker(text) {
 }
 
 function showDictError() {
-  els.dropHintText.textContent =
-    "辞書の読み込みに失敗しました。ネット接続を確認のうえ、" +
-    "下のボタンで再試行してください (複数のCDNを順番に試します)。";
+  els.dropHintText.textContent = "辞書の読み込みに失敗しました。ネット接続を確認のうえ、下のボタンで再試行してください。";
   els.retryDictBtn.style.display = "inline-block";
   els.dropHint.style.display = "flex";
 }
 
-/* ---- Canvas のリサイズ (Retina対応) ---- */
+/* ---- Canvas リサイズ ---- */
 function resizeCanvas() {
   const rect = els.canvas.parentElement.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -295,87 +244,59 @@ function resizeCanvas() {
 }
 window.addEventListener("resize", resizeCanvas);
 
-/* ---- 描画 (ORPを揃えて中央表示) ---- */
+/* ---- 描画 ---- */
 function render() {
-  const w = els.canvas.clientWidth;
-  const h = els.canvas.clientHeight;
+  const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
   ctx.clearRect(0, 0, w, h);
-
   if (!state.chunks.length) return;
 
-  const chunkText = state.chunks[state.index].text;
-  const chars = toCodePointArray(chunkText);
+  const chars = toCodePointArray(state.chunks[state.index].text);
   const orp = orpPosition(chars.length);
   const left = chars.slice(0, orp).join("");
-  const center = chars[orp];
+  const center = chars[orp] || "";
   const right = chars.slice(orp + 1).join("");
 
-  const cx = w / 2;
-  const cy = h / 2 - 10;
-
+  const cx = w / 2, cy = h / 2 - 10;
   ctx.font = `${state.fontSize}px ${state.fontFamily}`;
   ctx.textBaseline = "middle";
-
   const centerW = ctx.measureText(center).width;
 
-  ctx.strokeStyle = "#3a4054";
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#3a4054"; ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(cx, cy - state.fontSize * 0.9);
-  ctx.lineTo(cx, cy - state.fontSize * 0.55);
-  ctx.moveTo(cx, cy + state.fontSize * 0.55);
-  ctx.lineTo(cx, cy + state.fontSize * 0.9);
+  ctx.moveTo(cx, cy - state.fontSize * 0.9); ctx.lineTo(cx, cy - state.fontSize * 0.55);
+  ctx.moveTo(cx, cy + state.fontSize * 0.55); ctx.lineTo(cx, cy + state.fontSize * 0.9);
   ctx.stroke();
 
-  // 文字色: state.monoColor が true なら中央文字も白(単色)、false なら赤
   const centerColor = state.monoColor ? "#e8e5da" : "#e2543b";
-
-  ctx.fillStyle = "#e8e5da";
-  ctx.textAlign = "right";
+  ctx.fillStyle = "#e8e5da"; ctx.textAlign = "right";
   ctx.fillText(left, cx - centerW / 2, cy);
-
-  ctx.fillStyle = centerColor;
-  ctx.textAlign = "center";
+  ctx.fillStyle = centerColor; ctx.textAlign = "center";
   ctx.fillText(center, cx, cy);
-
-  ctx.fillStyle = "#e8e5da";
-  ctx.textAlign = "left";
+  ctx.fillStyle = "#e8e5da"; ctx.textAlign = "left";
   ctx.fillText(right, cx + centerW / 2, cy);
 
   const total = state.chunks.length;
-  els.statusText.textContent =
-    `${state.index + 1} / ${total}` + (state.paused ? "　[一時停止中]" : "");
+  els.statusText.textContent = `${state.index + 1} / ${total}` + (state.paused ? "　[一時停止中]" : "");
   els.wpmText.textContent = `${state.wpm} WPM`;
   els.progressFill.style.width = `${((state.index + 1) / total) * 100}%`;
   els.playPauseBtn.textContent = state.paused ? "▶" : "⏸";
 }
 
 /* ---- 再生制御 ---- */
-function clearTimer() {
-  if (state.timerId !== null) {
-    clearTimeout(state.timerId);
-    state.timerId = null;
-  }
-}
+function clearTimer() { if (state.timerId !== null) { clearTimeout(state.timerId); state.timerId = null; } }
 
 function showStep() {
   if (!state.chunks.length) return;
   state.index = Math.max(0, Math.min(state.index, state.chunks.length - 1));
   render();
   if (state.paused) return;
-
   const dur = durationMsFor(state.chunks[state.index].text, state.wpm);
   state.timerId = setTimeout(advance, dur);
 }
 
 function advance() {
   if (state.paused) return;
-  if (state.index >= state.chunks.length - 1) {
-    state.paused = true;
-    render();
-    saveProgress();
-    return;
-  }
+  if (state.index >= state.chunks.length - 1) { state.paused = true; render(); saveProgress(); return; }
   state.index++;
   if (state.index % 20 === 0) saveProgress();
   showStep();
@@ -384,13 +305,7 @@ function advance() {
 function togglePause() {
   if (!state.chunks.length) return;
   state.paused = !state.paused;
-  if (state.paused) {
-    clearTimer();
-    saveProgress();
-    render();
-  } else {
-    showStep();
-  }
+  if (state.paused) { clearTimer(); saveProgress(); render(); } else { showStep(); }
 }
 
 function seek(delta) {
@@ -398,30 +313,28 @@ function seek(delta) {
   clearTimer();
   state.index = Math.max(0, Math.min(state.index + delta, state.chunks.length - 1));
   saveProgress();
-  if (state.paused) render();
-  else showStep();
+  if (state.paused) render(); else showStep();
 }
 
-function changeSpeed(delta) {
-  state.wpm = Math.max(60, state.wpm + delta);
-  render();
+function changeSpeed(delta) { state.wpm = Math.max(60, state.wpm + delta); render(); }
+
+function jumpToChunk(idx) {
+  if (!state.chunks.length) return;
+  clearTimer();
+  state.index = Math.max(0, Math.min(idx, state.chunks.length - 1));
+  saveProgress();
+  if (state.paused) render(); else showStep();
 }
 
 function jumpToInput() {
   if (!state.chunks.length) return;
   const n = parseInt(els.jumpInput.value, 10);
   if (!Number.isFinite(n)) return;
-  const total = state.chunks.length;
-  const idx = Math.max(1, Math.min(n, total)) - 1;
-  clearTimer();
-  state.index = idx;
-  saveProgress();
-  if (state.paused) render();
-  else showStep();
+  jumpToChunk(Math.max(1, Math.min(n, state.chunks.length)) - 1);
   els.jumpInput.blur();
 }
 
-/* ---- 進捗の自動保存 (localStorage) ---- */
+/* ---- 進捗保存 ---- */
 function saveProgress() {
   if (!state.fileKey || !state.chunks.length) return;
   try {
@@ -431,19 +344,288 @@ function saveProgress() {
   } catch (e) { /* ignore */ }
 }
 function loadProgress(key) {
-  try {
-    const db = JSON.parse(localStorage.getItem("jrsvp_progress") || "{}");
-    return db[key];
-  } catch (e) { return undefined; }
+  try { return JSON.parse(localStorage.getItem("jrsvp_progress") || "{}")[key]; } catch (e) { return undefined; }
 }
 
-/* ---- ファイル読み込み・形態素解析 (Worker経由) ---- */
-async function loadText(text, fileKey) {
+/* =====================================================================
+   目次 (TOC) 機能
+   ===================================================================== */
+// 見出しパターン:
+//   章  … 「第X章」で始まる行 (X は漢数字・算用数字混在)
+//   節  … 「●」で始まる行
+// どちらも短い(50文字以下)行限定。
+const CHAPTER_RE = /^第[一二三四五六七八九十百千壱弐参拾〇零\d]+章/;
+const SECTION_RE = /^[●]/;
+
+function extractHeadings(text) {
+  const result = [];
+  const lines = text.split("\n");
+  let offset = 0;
+  for (const line of lines) {
+    const clean = line.replace(/\r$/, "");
+    const trimmed = clean.trim();
+    if (trimmed.length > 0 && trimmed.length <= 50) {
+      if (CHAPTER_RE.test(trimmed)) {
+        result.push({ title: trimmed, charOffset: offset, type: "chapter" });
+      } else if (SECTION_RE.test(trimmed)) {
+        result.push({ title: trimmed, charOffset: offset, type: "section" });
+      }
+    }
+    offset += clean.length + 1; // +1 for '\n'
+  }
+  return result;
+}
+
+function charOffsetToChunkIdx(offset) {
+  let result = 0;
+  for (let i = 0; i < state.chunks.length; i++) {
+    const cs = state.chunks[i].charStart;
+    if (typeof cs === "number" && cs <= offset) result = i;
+    else if (typeof cs === "number" && cs > offset) break;
+  }
+  return result;
+}
+
+function buildTOC() {
+  els.tocBody.innerHTML = "";
+  if (!state.chunks.length) {
+    els.tocBody.innerHTML = '<p style="padding:16px;color:var(--text-dim);font-size:13px;">ファイルが読み込まれていません。</p>';
+    return;
+  }
+  if (!state.headings.length) {
+    els.tocBody.innerHTML = '<p style="padding:16px;color:var(--text-dim);font-size:13px;">章・見出し (●) が見つかりませんでした。<br>テキスト内に「第X章〜」または「●〜」で始まる行があると自動的に目次を生成します。</p>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const h of state.headings) {
+    const btn = document.createElement("button");
+    btn.className = "toc-item" + (h.type === "chapter" ? " chapter" : "");
+    btn.textContent = h.title;
+    const num = document.createElement("span");
+    num.className = "toc-num";
+    num.textContent = `(${h.chunkIndex + 1}章)`;
+    btn.appendChild(num);
+    btn.addEventListener("click", () => {
+      jumpToChunk(h.chunkIndex);
+      closeModal(els.tocOverlay);
+    });
+    frag.appendChild(btn);
+  }
+  els.tocBody.appendChild(frag);
+}
+
+/* =====================================================================
+   検索機能
+   ===================================================================== */
+function buildSearchMatches(query) {
+  if (!query || !state.originalText || !state.chunks.length) return [];
+  const matches = [];
+  const text = state.originalText;
+  let from = 0;
+  while (true) {
+    const idx = text.indexOf(query, from);
+    if (idx < 0) break;
+    const chunkIdx = charOffsetToChunkIdx(idx);
+    if (!matches.length || matches[matches.length - 1] !== chunkIdx) {
+      matches.push(chunkIdx);
+    }
+    from = idx + 1;
+  }
+  return matches;
+}
+
+function updateSearchUI() {
+  const m = state.searchMatches;
+  if (!m.length) {
+    els.searchCount.textContent = "見つかりません";
+  } else {
+    els.searchCount.textContent = `${state.searchMatchIdx + 1} / ${m.length}件`;
+  }
+}
+
+function searchGo(delta) {
+  if (!state.searchMatches.length) return;
+  const n = state.searchMatches.length;
+  state.searchMatchIdx = ((state.searchMatchIdx + delta) % n + n) % n;
+  updateSearchUI();
+  jumpToChunk(state.searchMatches[state.searchMatchIdx]);
+}
+
+function doSearch() {
+  const q = els.searchInput.value.trim();
+  if (!q) { els.searchCount.textContent = ""; state.searchMatches = []; return; }
+  state.searchMatches = buildSearchMatches(q);
+  state.searchMatchIdx = state.searchMatches.length ? 0 : -1;
+  updateSearchUI();
+  if (state.searchMatches.length) jumpToChunk(state.searchMatches[0]);
+}
+
+/* =====================================================================
+   しおり機能
+   ===================================================================== */
+const BOOKMARK_KEY = "jrsvp_bookmarks";
+
+function loadAllBookmarks() {
+  try { return JSON.parse(localStorage.getItem(BOOKMARK_KEY) || "[]"); } catch (e) { return []; }
+}
+function saveAllBookmarks(list) {
+  try { localStorage.setItem(BOOKMARK_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ }
+}
+
+function saveBookmark() {
+  if (!state.chunks.length || !state.fileKey) {
+    alert("ファイルが読み込まれていません。"); return;
+  }
+  const label = prompt(
+    "しおりの名前を入力してください（空白のままでもOKです）:",
+    `${state.fileName} — ${state.index + 1}/${state.chunks.length}章`
+  );
+  if (label === null) return; // キャンセル
+
+  const bm = {
+    id: Date.now(),
+    label: label.trim() || `${state.fileName} — ${state.index + 1}/${state.chunks.length}章`,
+    fileKey: state.fileKey,
+    fileName: state.fileName,
+    index: state.index,
+    total: state.chunks.length,
+    date: new Date().toLocaleString("ja-JP", { year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" }),
+  };
+  const list = loadAllBookmarks();
+  list.unshift(bm);
+  saveAllBookmarks(list);
+  buildBookmarkList();
+}
+
+function deleteBookmark(id) {
+  const list = loadAllBookmarks().filter(b => b.id !== id);
+  saveAllBookmarks(list);
+  buildBookmarkList();
+}
+
+function buildBookmarkList() {
+  const list = loadAllBookmarks();
+  els.bookmarkBody.innerHTML = "";
+  if (!list.length) {
+    els.bookmarkBody.innerHTML = '<p style="padding:16px;color:var(--text-dim);font-size:13px;">保存されたしおりはありません。<br>「現在位置を保存」で追加できます。</p>';
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  for (const bm of list) {
+    const item = document.createElement("div");
+    item.className = "bookmark-item";
+
+    const info = document.createElement("div");
+    info.className = "bookmark-info";
+    const title = document.createElement("div");
+    title.className = "bookmark-title";
+    title.textContent = bm.label;
+    const meta = document.createElement("div");
+    meta.className = "bookmark-meta";
+    meta.textContent = `${bm.date}　${bm.index + 1}/${bm.total}章`;
+    info.appendChild(title); info.appendChild(meta);
+
+    const actions = document.createElement("div");
+    actions.className = "bookmark-actions";
+
+    // 同一ファイルのしおりのみジャンプ可能
+    if (bm.fileKey === state.fileKey) {
+      const jumpBtn = document.createElement("button");
+      jumpBtn.textContent = "ジャンプ";
+      jumpBtn.addEventListener("click", () => {
+        jumpToChunk(bm.index);
+        closeModal(els.bookmarkOverlay);
+      });
+      actions.appendChild(jumpBtn);
+    } else {
+      const note = document.createElement("span");
+      note.style.cssText = "font-size:11px;color:var(--text-dim);white-space:nowrap;";
+      note.textContent = bm.fileName;
+      actions.appendChild(note);
+    }
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "削除";
+    delBtn.style.background = "none";
+    delBtn.addEventListener("click", () => {
+      if (confirm(`「${bm.label}」を削除しますか？`)) deleteBookmark(bm.id);
+    });
+    actions.appendChild(delBtn);
+
+    item.appendChild(info); item.appendChild(actions);
+    frag.appendChild(item);
+  }
+  els.bookmarkBody.appendChild(frag);
+}
+
+function exportBookmarks() {
+  const list = loadAllBookmarks();
+  if (!list.length) { alert("保存されたしおりがありません。"); return; }
+  const json = JSON.stringify(list);
+  navigator.clipboard.writeText(json).then(() => {
+    alert("しおりデータをクリップボードにコピーしました。\nメモ帳やGoogleドキュメント等に貼り付けて保存してください。\n別の端末でインポートする際は、その文字列を「インポート」から貼り付けてください。");
+  }).catch(() => {
+    // クリップボードAPIが使えない場合 (iOS Safariなど) はテキストエリアで表示
+    const ta = document.createElement("textarea");
+    ta.value = json;
+    ta.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:90vw;height:40vh;z-index:9999;background:#1e212b;color:#f1eee6;border:1px solid #343a4a;border-radius:8px;padding:10px;font-size:12px;";
+    document.body.appendChild(ta);
+    ta.select();
+    alert("以下のテキストをすべて選択してコピーしてください。コピー後、このダイアログを閉じると消えます。");
+    document.body.removeChild(ta);
+  });
+}
+
+function importBookmarks() {
+  const json = prompt("エクスポートしたしおりデータを貼り付けてください:");
+  if (!json) return;
+  try {
+    const incoming = JSON.parse(json.trim());
+    if (!Array.isArray(incoming)) throw new Error("配列ではありません");
+    const existing = loadAllBookmarks();
+    const existIds = new Set(existing.map(b => b.id));
+    const merged = [...existing, ...incoming.filter(b => !existIds.has(b.id))];
+    saveAllBookmarks(merged);
+    buildBookmarkList();
+    alert(`${incoming.length}件のしおりをインポートしました（重複は除外）。`);
+  } catch (e) {
+    alert("インポートに失敗しました。正しいしおりデータを貼り付けてください。");
+  }
+}
+
+/* ---- モーダル開閉 ---- */
+function openModal(overlay, onOpen) {
+  overlay.classList.remove("hidden");
+  document.body.style.overflow = "hidden";
+  if (onOpen) onOpen();
+}
+function closeModal(overlay) {
+  overlay.classList.add("hidden");
+  document.body.style.overflow = "";
+}
+
+/* ---- ファイル読み込み ---- */
+function decodeFileBuffer(buffer) {
+  try {
+    const utf8 = new TextDecoder("utf-8", { fatal: true });
+    let text = utf8.decode(buffer);
+    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+    return { text, encoding: "UTF-8" };
+  } catch (e) {
+    const sjis = new TextDecoder("shift_jis");
+    const text = sjis.decode(buffer);
+    return { text, encoding: "Shift_JIS" };
+  }
+}
+
+async function loadText(rawText, fileKey, fileName) {
   els.dropHint.style.display = "none";
 
+  // 行末を統一する (CRLFやCR → LF)
+  const text = rawText.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
   if (!state.dictReady) {
-    // 辞書がまだ準備できていない場合は、準備完了後に自動で処理を再開する
-    state.pendingLoad = { text, fileKey };
+    state.pendingLoad = { text, fileKey, fileName };
     els.statusText.textContent = "辞書の準備中です。準備ができたら自動的に解析を始めます...";
     return;
   }
@@ -473,14 +655,24 @@ async function loadText(text, fileKey) {
 
   state.chunks = chunks;
   state.fileKey = fileKey;
+  state.fileName = fileName;
+  state.originalText = text;
   state.paused = true;
+  state.searchMatches = [];
+  state.searchMatchIdx = -1;
+
+  // 見出し抽出
+  const rawHeadings = extractHeadings(text);
+  state.headings = rawHeadings.map(h => ({
+    ...h,
+    chunkIndex: charOffsetToChunkIdx(h.charOffset),
+  }));
 
   const saved = loadProgress(fileKey);
   const total = chunks.length;
   if (typeof saved === "number" && saved > 0 && saved < total - 1) {
     const resume = window.confirm(
-      `前回の続き (${saved + 1} / ${total}) から再生しますか？\n` +
-      `「キャンセル」を選ぶと最初から再生します。`
+      `前回の続き (${saved + 1} / ${total}) から再生しますか？\n「キャンセル」で最初から再生します。`
     );
     state.index = resume ? saved : 0;
   } else {
@@ -491,35 +683,9 @@ async function loadText(text, fileKey) {
   render();
 }
 
-els.retryDictBtn.addEventListener("click", () => {
-  els.retryDictBtn.style.display = "none";
-  els.statusText.textContent = "辞書を再読み込み中...";
-  // Workerを使い捨てにして再生成すると確実に状態がリセットされる
-  location.reload();
-});
+els.retryDictBtn.addEventListener("click", () => { location.reload(); });
 
-function fileKeyFor(file) {
-  return `${file.name}:${file.size}:${file.lastModified || 0}`;
-}
-
-// 文字コード判定: まずUTF-8として厳密(fatal: 不正なバイト列ならエラー)に
-// デコードを試す。Shift_JISのテキストをUTF-8として読むと、ほぼ必ずこの
-// 厳密デコードでエラーになるため、それを「Shift_JISらしい」の判定に使う。
-// (重い自前の文字コード判定処理を書かず、ブラウザ標準のTextDecoderの
-//  機能だけで判定できるため、アプリを重くしない簡潔な方法として採用)
-function decodeFileBuffer(buffer) {
-  try {
-    const utf8 = new TextDecoder("utf-8", { fatal: true });
-    let text = utf8.decode(buffer);
-    if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // BOM除去
-    return { text, encoding: "UTF-8" };
-  } catch (e) {
-    // UTF-8として不正 → Shift_JISとして読み直す
-    const sjis = new TextDecoder("shift_jis");
-    const text = sjis.decode(buffer);
-    return { text, encoding: "Shift_JIS" };
-  }
-}
+function fileKeyFor(file) { return `${file.name}:${file.size}:${file.lastModified || 0}`; }
 
 els.fileInput.addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
@@ -527,16 +693,13 @@ els.fileInput.addEventListener("change", (e) => {
   const reader = new FileReader();
   reader.onload = () => {
     let decoded;
-    try {
-      decoded = decodeFileBuffer(reader.result);
-    } catch (err) {
-      els.statusText.textContent = "文字コードを判別できず、読み込めませんでした。";
-      return;
+    try { decoded = decodeFileBuffer(reader.result); } catch (err) {
+      els.statusText.textContent = "文字コードを判別できず、読み込めませんでした。"; return;
     }
     if (decoded.encoding === "Shift_JIS") {
-      els.statusText.textContent = "Shift_JISの文字コードとして読み込みました。解析中...";
+      els.statusText.textContent = "Shift_JISとして読み込みました。解析中...";
     }
-    loadText(decoded.text, fileKeyFor(file));
+    loadText(decoded.text, fileKeyFor(file), file.name);
   };
   reader.onerror = () => { els.statusText.textContent = "ファイルを読み込めませんでした。"; };
   reader.readAsArrayBuffer(file);
@@ -546,18 +709,11 @@ els.fileInput.addEventListener("change", (e) => {
 els.openFileBtn.addEventListener("click", () => els.fileInput.click());
 
 /* ---- 設定パネル ---- */
-els.gearBtn.addEventListener("click", () => {
-  els.settingsPanel.classList.toggle("open");
-});
-
+els.gearBtn.addEventListener("click", () => { els.settingsPanel.classList.toggle("open"); });
 els.fontFamily.addEventListener("change", () => {
   els.fontFamilyCustom.style.display = els.fontFamily.value === "__custom__" ? "block" : "none";
 });
-
-els.fontSize.addEventListener("input", () => {
-  els.fontSizeLabel.textContent = `${els.fontSize.value}px`;
-});
-
+els.fontSize.addEventListener("input", () => { els.fontSizeLabel.textContent = `${els.fontSize.value}px`; });
 els.confirmFontBtn.addEventListener("click", () => {
   state.fontFamily = els.fontFamily.value === "__custom__"
     ? (els.fontFamilyCustom.value.trim() || state.fontFamily)
@@ -569,11 +725,49 @@ els.confirmFontBtn.addEventListener("click", () => {
   els.settingsPanel.classList.remove("open");
   els.confirmFontBtn.blur();
 });
-
 els.jumpBtn.addEventListener("click", () => { jumpToInput(); els.jumpBtn.blur(); });
 els.jumpInput.addEventListener("keydown", (e) => { if (e.key === "Enter") jumpToInput(); });
 
-/* ---- トランスポート(タップ操作) ---- */
+/* ---- 目次 ---- */
+els.tocBtn.addEventListener("click", () => { openModal(els.tocOverlay, buildTOC); });
+els.tocCloseBtn.addEventListener("click", () => closeModal(els.tocOverlay));
+els.tocOverlay.addEventListener("click", (e) => { if (e.target === els.tocOverlay) closeModal(els.tocOverlay); });
+
+/* ---- 検索 ---- */
+els.searchBtn.addEventListener("click", () => {
+  const isOpen = els.searchPanel.classList.contains("open");
+  if (isOpen) {
+    els.searchPanel.classList.remove("open");
+    state.searchMatches = []; els.searchCount.textContent = "";
+  } else {
+    els.searchPanel.classList.add("open");
+    els.searchInput.focus();
+  }
+  els.settingsPanel.classList.remove("open");
+});
+els.searchCloseBtn.addEventListener("click", () => {
+  els.searchPanel.classList.remove("open");
+  state.searchMatches = []; els.searchCount.textContent = "";
+});
+els.searchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
+els.searchInput.addEventListener("input", () => {
+  // 入力が変わったらマッチをリセット
+  state.searchMatches = []; state.searchMatchIdx = -1; els.searchCount.textContent = "";
+});
+els.searchNextBtn.addEventListener("click", () => {
+  if (state.searchMatches.length) searchGo(1); else doSearch();
+});
+els.searchPrevBtn.addEventListener("click", () => searchGo(-1));
+
+/* ---- しおり ---- */
+els.bookmarkBtn.addEventListener("click", () => { openModal(els.bookmarkOverlay, buildBookmarkList); });
+els.bookmarkCloseBtn.addEventListener("click", () => closeModal(els.bookmarkOverlay));
+els.bookmarkOverlay.addEventListener("click", (e) => { if (e.target === els.bookmarkOverlay) closeModal(els.bookmarkOverlay); });
+els.saveBookmarkBtn.addEventListener("click", saveBookmark);
+els.exportBookmarkBtn.addEventListener("click", exportBookmarks);
+els.importBookmarkBtn.addEventListener("click", importBookmarks);
+
+/* ---- トランスポート ---- */
 els.playPauseBtn.addEventListener("click", () => { togglePause(); els.playPauseBtn.blur(); });
 els.seekBackBtn.addEventListener("click", () => { seek(-1); els.seekBackBtn.blur(); });
 els.seekFwdBtn.addEventListener("click", () => { seek(1); els.seekFwdBtn.blur(); });
@@ -591,28 +785,13 @@ els.canvas.addEventListener("click", () => {
 window.addEventListener("keydown", (e) => {
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-
   switch (e.key) {
-    case " ":
-      e.preventDefault();
-      togglePause();
-      break;
-    case "ArrowLeft":
-      e.preventDefault();
-      seek(-1);
-      break;
-    case "ArrowRight":
-      e.preventDefault();
-      seek(1);
-      break;
-    case "ArrowUp":
-      e.preventDefault();
-      changeSpeed(20);
-      break;
-    case "ArrowDown":
-      e.preventDefault();
-      changeSpeed(-20);
-      break;
+    case " ": e.preventDefault(); togglePause(); break;
+    case "ArrowLeft": e.preventDefault(); seek(-1); break;
+    case "ArrowRight": e.preventDefault(); seek(1); break;
+    case "ArrowUp": e.preventDefault(); changeSpeed(20); break;
+    case "ArrowDown": e.preventDefault(); changeSpeed(-20); break;
+    case "f": case "F": els.searchPanel.classList.toggle("open"); if (els.searchPanel.classList.contains("open")) els.searchInput.focus(); break;
   }
 });
 
@@ -624,6 +803,5 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
 }
 
-// メインスレッドをブロックせず、Workerに辞書の準備を指示する
 els.statusText.textContent = "辞書を準備中です...";
 dictWorker.postMessage({ type: "init" });

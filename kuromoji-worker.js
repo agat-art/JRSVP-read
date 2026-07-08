@@ -122,7 +122,7 @@ self.onmessage = function (e) {
     }
     try {
       const tokens = tokenizer.tokenize(msg.text);
-      const simplified = tokens.map((t) => ({ surface: t.surface_form, pos: t.pos }));
+      const simplified = tokens.map((t) => ({ surface: t.surface_form, pos: t.pos, start: (t.word_position || 1) - 1 }));
       postMessage({ type: "tokenize_result", id: msg.id, tokens: simplified });
     } catch (err) {
       postMessage({ type: "tokenize_error", id: msg.id, error: String(err) });
