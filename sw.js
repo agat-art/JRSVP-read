@@ -7,7 +7,7 @@
 // バージョン番号を上げること (古いキャッシュが優先されて更新が反映されない
 // 事故を防ぐため)。
 
-const CACHE_NAME = "jrsvp-shell-v6";
+const CACHE_NAME = "jrsvp-shell-v7";
 const SHELL_FILES = [
   "./",
   "./index.html",
