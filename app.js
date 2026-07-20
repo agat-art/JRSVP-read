@@ -484,14 +484,23 @@ function doSearch() {
    しおり機能
    ===================================================================== */
 
+// ---- 同一ファイル判定 ----
 // fileKeyは "filename:size:lastModified" の形式。
-// lastModified はデバイスや転送方法によって変わるため(iCloud/Google Drive経由など)、
-// 別デバイスでインポートした場合にfileKeyが一致しなくなる。
-// filename:size の部分だけで同一ファイルと判定することで、この問題を回避する。
+// lastModified はデバイスや転送方法によって変わるため除外する。
+// さらに保険として、ファイル名と総チャンク数の一致も判定基準にする。
 function fileKeyBase(key) {
   if (!key) return "";
   const parts = key.split(":");
   return parts.length >= 2 ? parts[0] + ":" + parts[1] : key;
+}
+
+function isSameFile(bm) {
+  if (!state.chunks.length) return false; // ファイルが開かれていない
+  // 判定1: filename:size の一致 (lastModified を無視)
+  if (state.fileKey && fileKeyBase(bm.fileKey) === fileKeyBase(state.fileKey)) return true;
+  // 判定2: ファイル名と総チャンク数の一致 (fileKeyの形式が違う場合の保険)
+  if (bm.fileName && bm.fileName === state.fileName && bm.total === state.chunks.length) return true;
+  return false;
 }
 const BOOKMARK_KEY = "jrsvp_bookmarks";
 
@@ -558,9 +567,8 @@ function buildBookmarkList() {
     const actions = document.createElement("div");
     actions.className = "bookmark-actions";
 
-    // lastModifiedを除いたfilename:sizeで比較することで
-    // デバイス間でインポートしたしおりでもジャンプ可能にする
-    if (fileKeyBase(bm.fileKey) === fileKeyBase(state.fileKey)) {
+    // 同一ファイル判定: fileKeyBase一致 または ファイル名+チャンク数一致
+    if (isSameFile(bm)) {
       const jumpBtn = document.createElement("button");
       jumpBtn.textContent = "ジャンプ";
       jumpBtn.addEventListener("click", () => {
