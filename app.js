@@ -160,8 +160,8 @@ const state = {
   wpm: 400,
   paused: true,
   timerId: null,
-  fontFamily: els.fontFamily.value,
-  fontSize: parseInt(els.fontSize.value, 10),
+  fontFamily: localStorage.getItem("jrsvp_font_family") || els.fontFamily.value,
+  fontSize: parseInt(localStorage.getItem("jrsvp_font_size") || els.fontSize.value, 10),
   monoColor: localStorage.getItem("jrsvp_mono_color") === "1",
   fileKey: null,
   fileName: "",
@@ -361,18 +361,29 @@ function extractHeadings(text) {
   const result = [];
   const lines = text.split("\n");
   let offset = 0;
-  for (const line of lines) {
-    const clean = line.replace(/\r$/, "");
+  let prevWasEmpty = true; // 先頭行は「前が空行」扱いにする
+
+  for (let i = 0; i < lines.length; i++) {
+    const clean = lines[i].replace(/\r$/, "");
     const trimmed = clean.trim();
+
     if (trimmed.length > 0 && trimmed.length <= 50) {
       if (CHAPTER_RE.test(trimmed)) {
+        // 「第X章〜」パターン
         result.push({ title: trimmed, charOffset: offset, type: "chapter" });
       } else if (SECTION_RE.test(trimmed)) {
+        // 「●」で始まるパターン
+        result.push({ title: trimmed, charOffset: offset, type: "section" });
+      } else if (prevWasEmpty && trimmed.length <= 20) {
+        // 前行が空行 かつ 20文字以内 → 見出しと見なす
         result.push({ title: trimmed, charOffset: offset, type: "section" });
       }
     }
+
+    prevWasEmpty = (trimmed.length === 0);
     offset += clean.length + 1; // +1 for '\n'
   }
+
   return result;
 }
 
@@ -463,6 +474,16 @@ function doSearch() {
 /* =====================================================================
    しおり機能
    ===================================================================== */
+
+// fileKeyは "filename:size:lastModified" の形式。
+// lastModified はデバイスや転送方法によって変わるため(iCloud/Google Drive経由など)、
+// 別デバイスでインポートした場合にfileKeyが一致しなくなる。
+// filename:size の部分だけで同一ファイルと判定することで、この問題を回避する。
+function fileKeyBase(key) {
+  if (!key) return "";
+  const parts = key.split(":");
+  return parts.length >= 2 ? parts[0] + ":" + parts[1] : key;
+}
 const BOOKMARK_KEY = "jrsvp_bookmarks";
 
 function loadAllBookmarks() {
@@ -528,8 +549,9 @@ function buildBookmarkList() {
     const actions = document.createElement("div");
     actions.className = "bookmark-actions";
 
-    // 同一ファイルのしおりのみジャンプ可能
-    if (bm.fileKey === state.fileKey) {
+    // lastModifiedを除いたfilename:sizeで比較することで
+    // デバイス間でインポートしたしおりでもジャンプ可能にする
+    if (fileKeyBase(bm.fileKey) === fileKeyBase(state.fileKey)) {
       const jumpBtn = document.createElement("button");
       jumpBtn.textContent = "ジャンプ";
       jumpBtn.addEventListener("click", () => {
@@ -720,7 +742,11 @@ els.confirmFontBtn.addEventListener("click", () => {
     : els.fontFamily.value;
   state.fontSize = parseInt(els.fontSize.value, 10);
   state.monoColor = els.colorMode.value === "mono";
-  try { localStorage.setItem("jrsvp_mono_color", state.monoColor ? "1" : "0"); } catch (e) { /* ignore */ }
+  try {
+    localStorage.setItem("jrsvp_font_family", state.fontFamily);
+    localStorage.setItem("jrsvp_font_size", String(state.fontSize));
+    localStorage.setItem("jrsvp_mono_color", state.monoColor ? "1" : "0");
+  } catch (e) { /* ignore */ }
   render();
   els.settingsPanel.classList.remove("open");
   els.confirmFontBtn.blur();
@@ -797,6 +823,28 @@ window.addEventListener("keydown", (e) => {
 
 /* ---- 初期化 ---- */
 els.colorMode.value = state.monoColor ? "mono" : "red";
+
+// 保存されたフォント設定をUIに反映する
+{
+  const savedFamily = localStorage.getItem("jrsvp_font_family");
+  if (savedFamily) {
+    // セレクトボックスの選択肢に一致するものがあれば選択、なければカスタム扱い
+    let found = false;
+    for (const opt of els.fontFamily.options) {
+      if (opt.value === savedFamily) { els.fontFamily.value = savedFamily; found = true; break; }
+    }
+    if (!found && savedFamily !== "__custom__") {
+      els.fontFamily.value = "__custom__";
+      els.fontFamilyCustom.value = savedFamily;
+      els.fontFamilyCustom.style.display = "block";
+    }
+  }
+  const savedSize = localStorage.getItem("jrsvp_font_size");
+  if (savedSize) {
+    els.fontSize.value = savedSize;
+    els.fontSizeLabel.textContent = `${savedSize}px`;
+  }
+}
 resizeCanvas();
 
 if ("serviceWorker" in navigator) {
