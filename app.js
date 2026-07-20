@@ -355,7 +355,16 @@ function loadProgress(key) {
 //   節  … 「●」で始まる行
 // どちらも短い(50文字以下)行限定。
 const CHAPTER_RE = /^第[一二三四五六七八九十百千壱弐参拾〇零\d]+章/;
+// 章の直後に「で/が/を/に/も」などの助詞が続く場合は章タイトルではなく文中言及
+const CHAPTER_REF_RE = /^第[一二三四五六七八九十百千壱弐参拾〇零\d]+章[でがをにも]/;
 const SECTION_RE = /^[●]/;
+
+// 区切り線判定:
+// ひらがな・カタカナ・漢字・英字（全角含む）を1文字も含まない行は
+// 「——」「---」「＊＊＊」のような装飾的な区切り線とみなす
+function isSeparatorLine(text) {
+  return !/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAFa-zA-Z\uFF21-\uFF5A\uFF41-\uFF5A\uFF66-\uFF9F]/.test(text);
+}
 
 function extractHeadings(text) {
   const result = [];
@@ -368,14 +377,14 @@ function extractHeadings(text) {
     const trimmed = clean.trim();
 
     if (trimmed.length > 0 && trimmed.length <= 50) {
-      if (CHAPTER_RE.test(trimmed)) {
-        // 「第X章〜」パターン
+      if (CHAPTER_RE.test(trimmed) && !CHAPTER_REF_RE.test(trimmed)) {
+        // 「第X章〜」パターン。ただし章の後に助詞が続く文中言及は除外
         result.push({ title: trimmed, charOffset: offset, type: "chapter" });
       } else if (SECTION_RE.test(trimmed)) {
         // 「●」で始まるパターン
         result.push({ title: trimmed, charOffset: offset, type: "section" });
-      } else if (prevWasEmpty && trimmed.length <= 20) {
-        // 前行が空行 かつ 20文字以内 → 見出しと見なす
+      } else if (prevWasEmpty && trimmed.length <= 20 && !isSeparatorLine(trimmed) && !CHAPTER_REF_RE.test(trimmed)) {
+        // 前行が空行 かつ 20文字以内 かつ 区切り線でない かつ 章への言及でない → 見出しと見なす
         result.push({ title: trimmed, charOffset: offset, type: "section" });
       }
     }
