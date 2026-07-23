@@ -40,8 +40,24 @@
   .row label{ font-size:12px; color:var(--text-dim); min-width:64px; }
   select,input[type=text],input[type=number]{ font-family:var(--ui-font); background:var(--surface-alt); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font-size:14px; }
   select{ max-width:220px; }
-  input[type=number]{ width:70px; }
+  input[type=number]{ width:90px; }
   input[type=range]{ flex:1; accent-color:var(--accent); }
+  /* iOSのダブルタップズームを防止 */
+  button, .btn { touch-action: manipulation; }
+
+  /* ---------- UI自動非表示 ---------- */
+  /* 再生開始3秒後にヘッダー・フッターをスライドアウトして読書エリアを最大化 */
+  header, footer {
+    transition: max-height 0.35s ease, opacity 0.35s ease;
+    overflow: hidden;
+    max-height: 200px;
+  }
+  body.ui-hidden header,
+  body.ui-hidden footer {
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
 
   /* 検索パネル */
   #searchPanel{ background:var(--surface); border-bottom:1px solid var(--line); padding:8px 10px; display:none; align-items:center; gap:8px; }

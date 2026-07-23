@@ -250,7 +250,8 @@ function render() {
   ctx.clearRect(0, 0, w, h);
   if (!state.chunks.length) return;
 
-  const chars = toCodePointArray(state.chunks[state.index].text);
+  const currentChunk = state.chunks[state.index];
+  const chars = toCodePointArray(currentChunk.text);
   const orp = orpPosition(chars.length);
   const left = chars.slice(0, orp).join("");
   const center = chars[orp] || "";
@@ -267,13 +268,24 @@ function render() {
   ctx.moveTo(cx, cy + state.fontSize * 0.55); ctx.lineTo(cx, cy + state.fontSize * 0.9);
   ctx.stroke();
 
-  const centerColor = state.monoColor ? "#e8e5da" : "#e2543b";
-  ctx.fillStyle = "#e8e5da"; ctx.textAlign = "right";
-  ctx.fillText(left, cx - centerW / 2, cy);
-  ctx.fillStyle = centerColor; ctx.textAlign = "center";
-  ctx.fillText(center, cx, cy);
-  ctx.fillStyle = "#e8e5da"; ctx.textAlign = "left";
-  ctx.fillText(right, cx + centerW / 2, cy);
+  if (currentChunk.isHeading) {
+    // 見出しチャンク: ORP文字を赤(#e2543b)、前後を薄い赤(#f0a98f)で表示
+    ctx.fillStyle = "#f0a98f"; ctx.textAlign = "right";
+    ctx.fillText(left, cx - centerW / 2, cy);
+    ctx.fillStyle = "#e2543b"; ctx.textAlign = "center";
+    ctx.fillText(center, cx, cy);
+    ctx.fillStyle = "#f0a98f"; ctx.textAlign = "left";
+    ctx.fillText(right, cx + centerW / 2, cy);
+  } else {
+    // 通常チャンク: 「赤くする」設定は青(#4a9eff)に変更
+    const centerColor = state.monoColor ? "#e8e5da" : "#4a9eff";
+    ctx.fillStyle = "#e8e5da"; ctx.textAlign = "right";
+    ctx.fillText(left, cx - centerW / 2, cy);
+    ctx.fillStyle = centerColor; ctx.textAlign = "center";
+    ctx.fillText(center, cx, cy);
+    ctx.fillStyle = "#e8e5da"; ctx.textAlign = "left";
+    ctx.fillText(right, cx + centerW / 2, cy);
+  }
 
   const total = state.chunks.length;
   els.statusText.textContent = `${state.index + 1} / ${total}` + (state.paused ? "　[一時停止中]" : "");
@@ -290,7 +302,8 @@ function showStep() {
   state.index = Math.max(0, Math.min(state.index, state.chunks.length - 1));
   render();
   if (state.paused) return;
-  const dur = durationMsFor(state.chunks[state.index].text, state.wpm);
+  const cur = state.chunks[state.index];
+  const dur = durationMsFor(cur.text, state.wpm) * (cur.isHeading ? 2 : 1);
   state.timerId = setTimeout(advance, dur);
 }
 
@@ -305,7 +318,85 @@ function advance() {
 function togglePause() {
   if (!state.chunks.length) return;
   state.paused = !state.paused;
-  if (state.paused) { clearTimer(); saveProgress(); render(); } else { showStep(); }
+  if (state.paused) {
+    clearTimer(); clearTimeout(uiHideTimer); showUI(); saveProgress(); render();
+  } else {
+    showStep(); resetUiTimer();
+  }
+}
+
+/* ---- UI自動非表示 (item 6) ---- */
+// 再生開始から3秒後にヘッダー・フッターを自動的に隠す。
+// タップ・ボタン操作でいつでも再表示できる。
+let uiHideTimer = null;
+
+function resetUiTimer() {
+  clearTimeout(uiHideTimer); uiHideTimer = null;
+  // パネル・モーダルが開いているときはタイマーを起動しない
+  const anyOpen = els.settingsPanel.classList.contains("open") ||
+    els.searchPanel.classList.contains("open") ||
+    !els.tocOverlay.classList.contains("hidden") ||
+    !els.bookmarkOverlay.classList.contains("hidden");
+  if (!state.paused && state.chunks.length && !anyOpen) {
+    uiHideTimer = setTimeout(hideUI, 3000);
+  }
+}
+
+function showUI() {
+  const wasHidden = document.body.classList.contains("ui-hidden");
+  document.body.classList.remove("ui-hidden");
+  if (wasHidden) setTimeout(resizeCanvas, 380);
+  resetUiTimer();
+}
+
+function hideUI() {
+  els.settingsPanel.classList.remove("open");
+  els.searchPanel.classList.remove("open");
+  document.body.classList.add("ui-hidden");
+  setTimeout(resizeCanvas, 380);
+}
+
+/* ---- 長押しseek (item 5) ----
+   短いタップ(500ms未満): 1チャンク移動
+   長押し(500ms以上): 500msごとに連続移動
+   → iPhoneのダブルタップズームも回避できる */
+function setupLongPress(btn, action) {
+  let longTimer = null;
+  let repeatTimer = null;
+
+  function start(e) {
+    e.preventDefault();
+    longTimer = setTimeout(() => {
+      longTimer = null;
+      action();
+      repeatTimer = setInterval(action, 500);
+    }, 500);
+  }
+
+  function end(e) {
+    e.preventDefault();
+    if (longTimer !== null) {
+      // 短いタップ: タイマーをキャンセルして1回実行
+      clearTimeout(longTimer); longTimer = null;
+      action();
+    } else {
+      // 長押し終了: リピートを止める
+      clearInterval(repeatTimer); repeatTimer = null;
+    }
+    btn.blur();
+  }
+
+  function cancel() {
+    clearTimeout(longTimer); longTimer = null;
+    clearInterval(repeatTimer); repeatTimer = null;
+  }
+
+  btn.addEventListener("touchstart", start, { passive: false });
+  btn.addEventListener("touchend", end, { passive: false });
+  btn.addEventListener("touchcancel", cancel);
+  btn.addEventListener("mousedown", (e) => { if (e.button === 0) start(e); });
+  btn.addEventListener("mouseup", (e) => { if (e.button === 0) end(e); });
+  btn.addEventListener("mouseleave", cancel);
 }
 
 function seek(delta) {
@@ -379,13 +470,13 @@ function extractHeadings(text) {
     if (trimmed.length > 0 && trimmed.length <= 50) {
       if (CHAPTER_RE.test(trimmed) && !CHAPTER_REF_RE.test(trimmed)) {
         // 「第X章〜」パターン。ただし章の後に助詞が続く文中言及は除外
-        result.push({ title: trimmed, charOffset: offset, type: "chapter" });
+        result.push({ title: trimmed, charOffset: offset, lineLength: clean.length, type: "chapter" });
       } else if (SECTION_RE.test(trimmed)) {
         // 「●」で始まるパターン
-        result.push({ title: trimmed, charOffset: offset, type: "section" });
+        result.push({ title: trimmed, charOffset: offset, lineLength: clean.length, type: "section" });
       } else if (prevWasEmpty && trimmed.length <= 20 && !isSeparatorLine(trimmed) && !CHAPTER_REF_RE.test(trimmed)) {
         // 前行が空行 かつ 20文字以内 かつ 区切り線でない かつ 章への言及でない → 見出しと見なす
-        result.push({ title: trimmed, charOffset: offset, type: "section" });
+        result.push({ title: trimmed, charOffset: offset, lineLength: clean.length, type: "section" });
       }
     }
 
@@ -423,7 +514,7 @@ function buildTOC() {
     btn.textContent = h.title;
     const num = document.createElement("span");
     num.className = "toc-num";
-    num.textContent = `(${h.chunkIndex + 1}章)`;
+    num.textContent = `(${h.chunkIndex + 1}行)`;
     btn.appendChild(num);
     btn.addEventListener("click", () => {
       jumpToChunk(h.chunkIndex);
@@ -517,7 +608,7 @@ function saveBookmark() {
   }
   const label = prompt(
     "しおりの名前を入力してください（空白のままでもOKです）:",
-    `${state.fileName} — ${state.index + 1}/${state.chunks.length}章`
+    `${state.fileName} — ${state.index + 1}/${state.chunks.length}行`
   );
   if (label === null) return; // キャンセル
 
@@ -561,7 +652,7 @@ function buildBookmarkList() {
     title.textContent = bm.label;
     const meta = document.createElement("div");
     meta.className = "bookmark-meta";
-    meta.textContent = `${bm.date}　${bm.index + 1}/${bm.total}章`;
+    meta.textContent = `${bm.date}　${bm.index + 1}/${bm.total}行`;
     info.appendChild(title); info.appendChild(meta);
 
     const actions = document.createElement("div");
@@ -636,11 +727,13 @@ function importBookmarks() {
 function openModal(overlay, onOpen) {
   overlay.classList.remove("hidden");
   document.body.style.overflow = "hidden";
+  clearTimeout(uiHideTimer); showUI();
   if (onOpen) onOpen();
 }
 function closeModal(overlay) {
   overlay.classList.add("hidden");
   document.body.style.overflow = "";
+  resetUiTimer();
 }
 
 /* ---- ファイル読み込み ---- */
@@ -700,12 +793,23 @@ async function loadText(rawText, fileKey, fileName) {
   state.searchMatches = [];
   state.searchMatchIdx = -1;
 
-  // 見出し抽出
+  // 見出し抽出 & チャンクへのisHeadingフラグ付与
   const rawHeadings = extractHeadings(text);
   state.headings = rawHeadings.map(h => ({
     ...h,
     chunkIndex: charOffsetToChunkIdx(h.charOffset),
+    endCharOffset: h.charOffset + h.lineLength,
   }));
+  // 見出し行の文字範囲に charStart が含まれるチャンクに isHeading = true を付ける
+  // (見出しが複数チャンクに分割されている場合、全チャンクが赤・2倍時間になる)
+  const headingRanges = state.headings.map(h => ({ start: h.charOffset, end: h.endCharOffset }));
+  for (const chunk of state.chunks) {
+    chunk.isHeading = headingRanges.some(r =>
+      typeof chunk.charStart === "number" &&
+      chunk.charStart >= r.start &&
+      chunk.charStart < r.end
+    );
+  }
 
   const saved = loadProgress(fileKey);
   const total = chunks.length;
@@ -748,7 +852,7 @@ els.fileInput.addEventListener("change", (e) => {
 els.openFileBtn.addEventListener("click", () => els.fileInput.click());
 
 /* ---- 設定パネル ---- */
-els.gearBtn.addEventListener("click", () => { els.settingsPanel.classList.toggle("open"); });
+els.gearBtn.addEventListener("click", () => { els.settingsPanel.classList.toggle("open"); showUI(); });
 els.fontFamily.addEventListener("change", () => {
   els.fontFamilyCustom.style.display = els.fontFamily.value === "__custom__" ? "block" : "none";
 });
@@ -767,6 +871,7 @@ els.confirmFontBtn.addEventListener("click", () => {
   render();
   els.settingsPanel.classList.remove("open");
   els.confirmFontBtn.blur();
+  resetUiTimer();
 });
 els.jumpBtn.addEventListener("click", () => { jumpToInput(); els.jumpBtn.blur(); });
 els.jumpInput.addEventListener("keydown", (e) => { if (e.key === "Enter") jumpToInput(); });
@@ -791,6 +896,7 @@ els.searchBtn.addEventListener("click", () => {
 els.searchCloseBtn.addEventListener("click", () => {
   els.searchPanel.classList.remove("open");
   state.searchMatches = []; els.searchCount.textContent = "";
+  resetUiTimer();
 });
 els.searchInput.addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch(); });
 els.searchInput.addEventListener("input", () => {
@@ -812,17 +918,22 @@ els.importBookmarkBtn.addEventListener("click", importBookmarks);
 
 /* ---- トランスポート ---- */
 els.playPauseBtn.addEventListener("click", () => { togglePause(); els.playPauseBtn.blur(); });
-els.seekBackBtn.addEventListener("click", () => { seek(-1); els.seekBackBtn.blur(); });
-els.seekFwdBtn.addEventListener("click", () => { seek(1); els.seekFwdBtn.blur(); });
-els.speedUpBtn.addEventListener("click", () => { changeSpeed(20); els.speedUpBtn.blur(); });
-els.speedDownBtn.addEventListener("click", () => { changeSpeed(-20); els.speedDownBtn.blur(); });
+// seekBack / seekFwd は長押しに対応 (iPhoneダブルタップズーム対策 & 連続シーク)
+setupLongPress(els.seekBackBtn, () => { seek(-1); showUI(); });
+setupLongPress(els.seekFwdBtn, () => { seek(1); showUI(); });
+els.speedUpBtn.addEventListener("click", () => { changeSpeed(20); showUI(); els.speedUpBtn.blur(); });
+els.speedDownBtn.addEventListener("click", () => { changeSpeed(-20); showUI(); els.speedDownBtn.blur(); });
 
 let lastCanvasTapAt = 0;
 els.canvas.addEventListener("click", () => {
   const now = Date.now();
   if (now - lastCanvasTapAt < 250) return;
   lastCanvasTapAt = now;
-  togglePause();
+  if (document.body.classList.contains("ui-hidden")) {
+    showUI(); // UIが隠れているときは再表示だけ（一時停止しない）
+  } else {
+    togglePause();
+  }
 });
 
 window.addEventListener("keydown", (e) => {
