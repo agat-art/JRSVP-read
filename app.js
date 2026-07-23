@@ -497,6 +497,62 @@ function charOffsetToChunkIdx(offset) {
   return result;
 }
 
+/* =====================================================================
+   見出しチャンク特定 (テキストマッチング方式)
+
+   【なぜこの方式か】
+   以前は kuromoji の word_position（文字位置）を charStart として使い、
+   見出しの文字範囲 [charOffset, charOffset+lineLength) に入るチャンクを
+   見出しとしてマークしていた。しかし kuromoji のビルドや辞書によっては
+   word_position が正しく返らない場合があり、その場合 charStart がすべて 0
+   になってしまう。これにより:
+     - 全チャンクが最初の見出しの範囲に入り「見出し扱い」になる
+     - charOffsetToChunkIdx が常に 0 or 末尾を返し TOC ジャンプが壊れる
+   これを回避するため、文字位置に依存せず「見出しのタイトルテキストを
+   チャンク列から直接検索する」方式に切り替えた。
+   ===================================================================== */
+function markHeadingChunks(headings, chunks) {
+  // 全チャンクのフラグをリセット
+  for (const c of chunks) c.isHeading = false;
+  if (!headings.length || !chunks.length) return;
+
+  let startFrom = 0; // 各見出しの検索開始チャンクインデックス
+
+  for (const h of headings) {
+    // 見出しタイトルから空白・改行を除去した比較用文字列
+    const target = h.title.replace(/[\s\n\r]/g, "");
+    if (!target) { h.chunkIndex = 0; continue; }
+
+    let found = false;
+    for (let i = startFrom; i < chunks.length && !found; i++) {
+      // 空白・改行のみのチャンクは見出しの開始点にしない
+      if (chunks[i].text.replace(/[\s\n\r]/g, "") === "") continue;
+
+      let acc = "";
+      for (let j = i; j < chunks.length; j++) {
+        acc += chunks[j].text.replace(/[\s\n\r]/g, "");
+        // acc の先頭が target で始まるか確認
+        // includes ではなく startsWith を使うことで、
+        // 「本文テキストの途中に見出しと同じ文字列が含まれる」誤検知を防ぐ
+        if (acc.startsWith(target)) {
+          for (let k = i; k <= j; k++) chunks[k].isHeading = true;
+          h.chunkIndex = i;
+          startFrom = j + 1;
+          found = true;
+          break;
+        }
+        // target より大幅に長くなったら、この i では見つからないと判断して打ち切る
+        if (acc.length > target.length + 10) break;
+      }
+    }
+
+    if (!found) {
+      // テキストマッチで見つからない場合: charStart ベースにフォールバック
+      h.chunkIndex = charOffsetToChunkIdx(h.charOffset);
+    }
+  }
+}
+
 function buildTOC() {
   els.tocBody.innerHTML = "";
   if (!state.chunks.length) {
@@ -793,23 +849,11 @@ async function loadText(rawText, fileKey, fileName) {
   state.searchMatches = [];
   state.searchMatchIdx = -1;
 
-  // 見出し抽出 & チャンクへのisHeadingフラグ付与
+  // 見出し抽出 & テキストマッチングでチャンクにisHeadingフラグを付与
   const rawHeadings = extractHeadings(text);
-  state.headings = rawHeadings.map(h => ({
-    ...h,
-    chunkIndex: charOffsetToChunkIdx(h.charOffset),
-    endCharOffset: h.charOffset + h.lineLength,
-  }));
-  // 見出し行の文字範囲に charStart が含まれるチャンクに isHeading = true を付ける
-  // (見出しが複数チャンクに分割されている場合、全チャンクが赤・2倍時間になる)
-  const headingRanges = state.headings.map(h => ({ start: h.charOffset, end: h.endCharOffset }));
-  for (const chunk of state.chunks) {
-    chunk.isHeading = headingRanges.some(r =>
-      typeof chunk.charStart === "number" &&
-      chunk.charStart >= r.start &&
-      chunk.charStart < r.end
-    );
-  }
+  // markHeadingChunks が各 heading.chunkIndex も更新する
+  markHeadingChunks(rawHeadings, chunks);
+  state.headings = rawHeadings;
 
   const saved = loadProgress(fileKey);
   const total = chunks.length;
